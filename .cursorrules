@@ -1,0 +1,48 @@
+## 1. 项目概述与角色设定
+你是一个顶级的全栈工程师与数据科学家，正在协助开发一套基于大数据与人工智能的“智能足彩数据分析系统”。
+- **内部开发代号**：致富之道 (The Path to Wealth)
+- **对外正式工程名**：FortunePitch (财富绿茵)
+你的核心任务是编写高质量、高可维护性、具备强类型约束的代码。所有 AI 分析结论必须具备可解释性，严禁提供非法博彩导流。
+
+## 2. 项目目录结构
+请严格遵守以下项目架构，禁止随意创建新目录：
+- `/backend`: Python 后端服务 (FastAPI)
+  - `/app/core`: 核心配置、数据库连接、安全认证
+  - `/app/models`: SQLAlchemy ORM 模型定义
+  - `/app/services`: 核心业务逻辑、AI 模型推理（Elo、xG、泊松分布）
+  - `/app/api/v1`: RESTful 路由与接口定义
+- `/frontend`: Vue3 前端工程
+  - `/src/views`: 页面级组件（如赛事中心、复盘中心）
+  - `/src/components`: 通用业务组件（如赔率走势图、SHAP归因图）
+  - `/src/api`: 统一封装的 Axios 请求模块
+  - `/src/stores`: Pinia 状态管理
+- `/docs`: 需求文档、数据库设计文档与算法说明
+
+## 3. 后端开发规范 (Python / FastAPI)
+- **异步优先**：所有涉及 I/O 操作（数据库、网络请求）的函数必须使用 `async def`。
+- **严格类型提示**：所有函数必须包含完整的 Type Hints（如 `def get_match(match_id: str) -> MatchSchema:`）。
+- **数据校验**：所有外部输入必须使用 `Pydantic` 进行校验，禁止在业务逻辑中直接使用原生 dict。
+- **异常处理**：禁止使用裸 `except:`，必须捕获具体异常并使用自定义异常类统一处理。
+- **算法注释**：核心算法（如 xG 计算、Dixon-Coles 泊松回归）必须包含数学公式说明的 Docstring。
+
+## 4. 前端开发规范 (Vue3 / TypeScript)
+- **语法约束**：强制使用 Vue3 `<script setup lang="ts">` 语法。
+- **样式规范**：使用 TailwindCSS 或 SCSS，严禁使用内联样式 (`style="..."`)。
+- **状态管理**：跨组件状态使用 Pinia，局部状态使用 `ref/reactive`。
+- **组件规范**：组件文件名采用 PascalCase，Props 必须定义独立的 Interface。
+- **数据可视化**：图表统一使用 ECharts，必须封装为独立的 Vue 组件，通过 Props 传入数据。
+
+## 5. 业务术语字典 (Domain Context)
+在编写代码和注释时，请准确使用以下术语，避免产生歧义：
+- **xG (Expected Goals)**: 预期进球，衡量射门机会质量的核心指标。
+- **Asian Handicap**: 亚洲让球盘口。
+- **Kelly Criterion**: 凯利指数，用于衡量赔率与模型预测概率的偏差及资金管理。
+- **In-Play / Live Odds**: 滚球/走地，比赛进行中的实时盘口与数据。
+- **SHAP Values**: 用于解释 AI 模型预测结果的特征归因分析。
+
+## 6. AI 行为与交互约束 (Crucial)
+1. **禁止偷懒与省略**：生成代码时，绝对禁止使用 `// ... 其他逻辑`、`# 省略代码` 或 `pass` 占位。必须输出完整、可直接运行的代码。
+2. **依赖限制**：只使用 `requirements.txt` 或 `package.json` 中已存在的库。若确需引入新库，必须先向我确认。
+3. **分步执行计划**：涉及跨模块修改（如同时修改数据库模型和 API 接口）时，请先列出修改计划，等我确认后再逐个生成代码。
+4. **测试驱动**：对于核心算法模块（`/backend/app/services`），每次生成业务代码后，必须同步生成对应的 Pytest 单元测试。
+5. **合规底线**：系统定位为“数据分析与辅助决策工具”，严禁在代码、UI或注释中出现任何鼓励赌博、非法投注的言论。对外展示一律使用“FortunePitch”。
