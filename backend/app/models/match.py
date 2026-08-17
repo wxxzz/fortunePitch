@@ -1,77 +1,86 @@
-"""球队与比赛的 ORM 模型定义。"""
+"""比赛与赛果模块(Match Module):fp_match_ 前缀。
 
-from datetime import datetime
+系统的业务枢纽,记录赛事流转与结果。
+"""
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String
+import datetime
+import enum
+
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Integer,
+    String,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
+from app.models.base import League, Team
 
 
-class Team(Base):
-    """球队实体。"""
+class MatchStatus(str, enum.Enum):
+    """比赛状态枚举。"""
 
-    __tablename__ = "teams"
+    PENDING = "PENDING"
+    LIVE = "LIVE"
+    FINISHED = "FINISHED"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    name: Mapped[str] = mapped_column(String(128), unique=True, index=True)
-    # Elo 评分,初始值 1500,由 app.services.elo 模块维护
-    elo_rating: Mapped[float] = mapped_column(Float, default=1500.0)
-    league: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
-    home_matches: Mapped[list["Match"]] = relationship(
-        back_populates="home_team", foreign_keys="Match.home_team_id"
+class MatchGame(Base):
+    """比赛基础信息表(fp_match_games):单场比赛的核心关联枢纽。"""
+
+    __tablename__ = "fp_match_games"
+
+    # 比赛全局唯一标识(来自外部数据源,故用 VARCHAR 而非自增)
+    match_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    league_id: Mapped[int] = mapped_column(
+        ForeignKey("fp_base_leagues.league_id"), index=True, nullable=False
     )
-    away_matches: Mapped[list["Match"]] = relationship(
-        back_populates="away_team", foreign_keys="Match.away_team_id"
+    home_team_id: Mapped[int] = mapped_column(
+        ForeignKey("fp_base_teams.team_id"), nullable=False
     )
-
-
-class Match(Base):
-    """比赛实体。
-
-    一个 Match 记录一场比赛的基本信息、实际比分(已完赛)
-    以及一条可选的 OddsRecord 赔率快照。
-    """
-
-    __tablename__ = "matches"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    # 外部数据源的比赛唯一编号,用于幂等导入
-    external_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
-    league: Mapped[str] = mapped_column(String(64), index=True)
-    kickoff_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-
-    home_team_id: Mapped[int] = mapped_column(ForeignKey("teams.id"))
-    away_team_id: Mapped[int] = mapped_column(ForeignKey("teams.id"))
-    home_team: Mapped["Team"] = relationship(
-        back_populates="home_matches", foreign_keys=[home_team_id]
+    away_team_id: Mapped[int] = mapped_column(
+        ForeignKey("fp_base_teams.team_id"), nullable=False
     )
-    away_team: Mapped["Team"] = relationship(
-        back_populates="away_matches", foreign_keys=[away_team_id]
+    # 主裁判 ID(文档未定义裁判表,暂存外部编号)
+    referee_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    match_time: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
     )
+    match_status: Mapped[MatchStatus] = mapped_column(
+        Enum(MatchStatus, native_enum=True),
+        nullable=False,
+        default=MatchStatus.PENDING,
+    )
+    # 未完赛时比分记为 NULL,由 match_status 区分状态
+    home_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    away_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
-    # 已完赛时填充;-1 表示尚未开赛
-    home_goals: Mapped[int] = mapped_column(Integer, default=-1)
-    away_goals: Mapped[int] = mapped_column(Integer, default=-1)
+    league: Mapped["League"] = relationship(back_populates="games")
+    home_team: Mapped["Team"] = relationship(foreign_keys=[home_team_id])
+    away_team: Mapped["Team"] = relationship(foreign_keys=[away_team_id])
+    events: Mapped[list["MatchEvent"]] = relationship(back_populates="game")
 
-    odds_records: Mapped[list["OddsRecord"]] = relationship(back_populates="match")
 
+class MatchEvent(Base):
+    """比赛事件表(fp_match_events):滚球分析与事件驱动的关键节点。"""
 
-class OddsRecord(Base):
-    """赔率快照(胜/平/负 欧赔),按时间采集用于走势分析。
+    __tablename__ = "fp_match_events"
 
-    同一场比赛可有多条快照,记录市场预期的变化轨迹。
-    """
+    event_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    match_id: Mapped[str] = mapped_column(
+        ForeignKey("fp_match_games.match_id"), index=True, nullable=False
+    )
+    # 事件类型:GOAL / RED_CARD / YELLOW_CARD / SUBSTITUTION
+    event_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    # 发生时间(分钟,含伤停补时可为 45+2 的数值近似)
+    event_minute: Mapped[int] = mapped_column(Integer, nullable=False)
+    player_id: Mapped[int | None] = mapped_column(
+        ForeignKey("fp_base_players.player_id"), nullable=True
+    )
+    is_home_team: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
-    __tablename__ = "odds_records"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    match_id: Mapped[int] = mapped_column(ForeignKey("matches.id"), index=True)
-    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    # 欧赔:主胜 / 平局 / 客胜
-    home_win_odds: Mapped[float] = mapped_column(Float)
-    draw_odds: Mapped[float] = mapped_column(Float)
-    away_win_odds: Mapped[float] = mapped_column(Float)
-
-    match: Mapped["Match"] = relationship(back_populates="odds_records")
+    game: Mapped["MatchGame"] = relationship(back_populates="events")

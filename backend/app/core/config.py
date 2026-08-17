@@ -30,7 +30,8 @@ class Settings(BaseSettings):
     API_V1_PREFIX: str = "/api/v1"
     DEBUG: bool = False
 
-    # 异步数据库连接串,默认使用 SQLite 便于本地开发
+    # 异步数据库连接串,默认回退 SQLite(单测/离线开发用);
+    # MySQL 生产连接统一通过 backend/.env 的 DATABASE_URL 注入,避免硬编码凭证
     DATABASE_URL: str = "sqlite+aiosqlite:///./fortune_pitch.db"
 
     # 接口访问凭证,生产环境必须通过环境变量注入

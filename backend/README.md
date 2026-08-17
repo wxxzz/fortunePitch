@@ -6,6 +6,8 @@
 
 ```bash
 pip install -r requirements.txt
+cp .env.example .env   # 填入 MySQL 连接串与 API Key
+python -c "import asyncio; from app.core.database import init_db; asyncio.run(init_db())"  # 首次建表
 uvicorn app.main:app --reload --port 8000
 ```
 

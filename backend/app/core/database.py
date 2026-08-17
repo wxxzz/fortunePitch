@@ -47,11 +47,12 @@ async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
             raise
 
 
-async def init_models(metadata_obj: type[Base]) -> None:
-    """根据 ORM 元数据初始化数据库表(开发环境便捷入口)。
+async def init_db() -> None:
+    """根据 ORM 元数据初始化数据库表(开发/联调环境便捷入口)。
 
-    Args:
-        metadata_obj: `Base` 的元数据对象,通常传入 `Base.metadata` 所在类。
+    自动导入 app.models 以确保所有模型完成注册后统一建表。
     """
+    import app.models  # noqa: F401 触发全部模型注册
+
     async with engine.begin() as conn:
-        await conn.run_sync(metadata_obj.metadata.create_all)
+        await conn.run_sync(Base.metadata.create_all)
