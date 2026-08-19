@@ -3,6 +3,8 @@ fastapi==0.141.1
 uvicorn[standard]==0.30.6
 sqlalchemy[asyncio]==2.0.35
 aiomysql==0.2.0
+# SQLite 异步驱动(config.py 的默认回退连接串与单测使用)
+aiosqlite==0.20.0
 pydantic==2.9.2
 pydantic-settings==2.5.2
 python-dotenv==1.0.1

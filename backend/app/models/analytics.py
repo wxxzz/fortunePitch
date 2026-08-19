@@ -3,10 +3,10 @@
 存储算法引擎计算得出的深度量化数据。
 """
 
-from sqlalchemy import BigInteger, ForeignKey, Integer, Numeric
+from sqlalchemy import ForeignKey, Integer, Numeric
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.core.database import Base
+from app.core.database import Base, BigIntPK
 
 
 class TeamMatchStat(Base):
@@ -19,7 +19,7 @@ class TeamMatchStat(Base):
     __tablename__ = "fp_analytics_team_stats"
 
     # 记录 ID(文档原文 "tat_id",系排版丢字,规范为 stat_id)
-    stat_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    stat_id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
     match_id: Mapped[str] = mapped_column(
         ForeignKey("fp_match_games.match_id"), index=True, nullable=False
     )
@@ -44,7 +44,7 @@ class PlayerMatchPerformance(Base):
     __tablename__ = "fp_analytics_player_stats"
 
     performance_id: Mapped[int] = mapped_column(
-        BigInteger, primary_key=True, autoincrement=True
+        BigIntPK, primary_key=True, autoincrement=True
     )
     match_id: Mapped[str] = mapped_column(
         ForeignKey("fp_match_games.match_id"), index=True, nullable=False

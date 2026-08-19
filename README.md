@@ -9,18 +9,26 @@
 
 ```
 fortunePitch/
-├── backend/          # Python FastAPI 后端
-│   ├── app/core/     # 配置、数据库连接、安全认证、异常处理
-│   ├── app/models/   # SQLAlchemy ORM 模型
-│   ├── app/services/ # 核心算法(Elo、xG、Dixon-Coles 泊松)
-│   ├── app/api/v1/   # RESTful 路由与 Schema
-│   └── tests/        # Pytest 单元测试
-├── frontend/         # Vue3 + TypeScript 前端
-│   ├── src/views/    # 页面组件(赛事中心、复盘中心)
-│   ├── src/components/ # 业务组件(赔率走势图、SHAP 归因图)
-│   ├── src/api/      # Axios 请求封装
-│   └── src/stores/   # Pinia 状态管理
-└── docs/             # 需求、数据库设计、算法说明文档
+├── backend/              # Python FastAPI 后端
+│   ├── app/core/         # 配置、数据库连接、安全认证、异常处理
+│   ├── app/models/       # SQLAlchemy ORM 模型(按 4 模块分文件)
+│   ├── app/services/     # 核心算法(Elo、xG、Dixon-Coles 泊松)+ 通用 CRUD
+│   ├── app/api/v1/
+│   │   ├── base/         # 基础档案:联赛/球队/球员
+│   │   ├── match/        # 比赛与赛果:比赛/事件
+│   │   ├── analytics/    # 高阶数据分析:指标/表现/泊松预测
+│   │   └── strategy/     # 策略与赔率:赔率/推荐/决策/凯利
+│   └── tests/            # Pytest 单元与集成测试
+├── frontend/             # Vue3 + TypeScript 前端
+│   ├── src/views/
+│   │   ├── base/         # 基础档案页
+│   │   ├── match/        # 赛事中心页
+│   │   ├── analytics/    # 数据分析页
+│   │   └── strategy/     # 策略与赔率页
+│   ├── src/components/   # 按模块分组的业务组件(ECharts 封装等)
+│   ├── src/api/          # Axios 请求封装(按模块分组)
+│   └── src/stores/       # Pinia 状态管理(按模块拆分)
+└── docs/                 # 需求、数据库设计、算法说明文档
 ```
 
 ## 快速启动

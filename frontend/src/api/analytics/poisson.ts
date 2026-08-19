@@ -1,7 +1,7 @@
 /**
- * 数据分析相关 API。
+ * 高阶数据分析模块 API:Dixon-Coles 泊松比分预测。
  */
-import request from './request'
+import request from '../request'
 
 /** 胜平负概率预测结果 */
 export interface MatchProbabilities {
@@ -17,7 +17,7 @@ export interface ScoreProbability {
   probability: number
 }
 
-/** Dixon-Coles 泊松预测响应 */
+/** 泊松预测响应 */
 export interface PoissonPredictResponse {
   probabilities: MatchProbabilities
   top_scores: ScoreProbability[]
@@ -30,40 +30,15 @@ export interface PoissonPredictParams {
   awayXg: number
 }
 
-/** 凯利指数计算响应 */
-export interface KellyResponse {
-  kelly_fraction: number
-}
-
-/** 凯利指数计算请求参数 */
-export interface KellyParams {
-  modelProb: number
-  decimalOdds: number
-}
-
 /** 调用后端泊松比分预测接口 */
 export async function predictByPoisson(
   params: PoissonPredictParams,
 ): Promise<PoissonPredictResponse> {
   const { data } = await request.post<PoissonPredictResponse>(
-    '/api/v1/analysis/poisson',
+    '/api/v1/analytics/poisson',
     {
       home_xg: params.homeXg,
       away_xg: params.awayXg,
-    },
-  )
-  return data
-}
-
-/** 调用后端凯利指数计算接口 */
-export async function calculateKelly(
-  params: KellyParams,
-): Promise<KellyResponse> {
-  const { data } = await request.post<KellyResponse>(
-    '/api/v1/analysis/kelly',
-    {
-      model_prob: params.modelProb,
-      decimal_odds: params.decimalOdds,
     },
   )
   return data

@@ -4,8 +4,10 @@ import { useRouter } from 'vue-router'
 const router = useRouter()
 
 const NAV_ITEMS = [
-  { label: '赛事中心', route: '/' },
-  { label: '复盘中心', route: '/retrospect' },
+  { label: '基础档案', route: '/base' },
+  { label: '赛事中心', route: '/match' },
+  { label: '数据分析', route: '/analytics' },
+  { label: '策略与赔率', route: '/strategy' },
 ] as const
 </script>
 

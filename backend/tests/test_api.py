@@ -30,12 +30,12 @@ class TestHealthEndpoint:
         assert body["project"] == "FortunePitch"
 
 
-class TestAnalysisEndpoints:
-    """/api/v1/analysis 行为测试。"""
+class TestAnalyticsPoissonEndpoint:
+    """POST /api/v1/analytics/poisson 行为测试。"""
 
     async def test_poisson_prediction_valid(self, client: AsyncClient) -> None:
         response = await client.post(
-            "/api/v1/analysis/poisson",
+            "/api/v1/analytics/poisson",
             json={"home_xg": 1.6, "away_xg": 1.1},
             headers=HEADERS,
         )
@@ -48,24 +48,32 @@ class TestAnalysisEndpoints:
 
     async def test_poisson_rejects_non_positive_xg(self, client: AsyncClient) -> None:
         response = await client.post(
-            "/api/v1/analysis/poisson",
+            "/api/v1/analytics/poisson",
             json={"home_xg": 0, "away_xg": 1.1},
             headers=HEADERS,
         )
         assert response.status_code == 422
 
-    async def test_missing_api_key_returns_401(self, client: AsyncClient) -> None:
-        response = await client.post(
-            "/api/v1/analysis/poisson",
-            json={"home_xg": 1.6, "away_xg": 1.1},
-        )
-        assert response.status_code in (401, 403)
+
+class TestStrategyKellyEndpoint:
+    """POST /api/v1/strategy/kelly 行为测试。"""
 
     async def test_kelly_positive_edge(self, client: AsyncClient) -> None:
         response = await client.post(
-            "/api/v1/analysis/kelly",
+            "/api/v1/strategy/kelly",
             json={"model_prob": 0.6, "decimal_odds": 2.0},
             headers=HEADERS,
         )
         assert response.status_code == 200
         assert response.json()["kelly_fraction"] == pytest.approx(0.2)
+
+
+class TestAuth:
+    """API Key 校验测试。"""
+
+    async def test_missing_api_key_returns_401(self, client: AsyncClient) -> None:
+        response = await client.post(
+            "/api/v1/analytics/poisson",
+            json={"home_xg": 1.6, "away_xg": 1.1},
+        )
+        assert response.status_code in (401, 403)

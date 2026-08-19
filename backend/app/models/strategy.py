@@ -11,7 +11,6 @@ import enum
 
 from sqlalchemy import (
     JSON,
-    BigInteger,
     DateTime,
     Enum,
     ForeignKey,
@@ -20,7 +19,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.core.database import Base
+from app.core.database import Base, BigIntPK
 
 
 class OddsHistory(Base):
@@ -28,7 +27,7 @@ class OddsHistory(Base):
 
     __tablename__ = "fp_strategy_odds_history"
 
-    odds_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    odds_id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
     match_id: Mapped[str] = mapped_column(
         ForeignKey("fp_match_games.match_id"), index=True, nullable=False
     )
@@ -51,7 +50,7 @@ class Recommendation(Base):
     __tablename__ = "fp_strategy_recommendations"
 
     recommend_id: Mapped[int] = mapped_column(
-        BigInteger, primary_key=True, autoincrement=True
+        BigIntPK, primary_key=True, autoincrement=True
     )
     match_id: Mapped[str] = mapped_column(
         ForeignKey("fp_match_games.match_id"), index=True, nullable=False
@@ -65,7 +64,7 @@ class Recommendation(Base):
     # 推导逻辑标签,如 ["核心缺阵", "盘口浅开"]
     logic_tags: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
+        DateTime(timezone=True), nullable=False, default=datetime.datetime.now
     )
 
 
@@ -85,8 +84,8 @@ class UserDecision(Base):
 
     __tablename__ = "fp_strategy_user_decisions"
 
-    decision_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
+    decision_id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(BigIntPK, index=True, nullable=False)
     recommend_id: Mapped[int] = mapped_column(
         ForeignKey("fp_strategy_recommendations.recommend_id"), nullable=False
     )

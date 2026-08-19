@@ -2,6 +2,7 @@
 
 from collections.abc import AsyncGenerator
 
+from sqlalchemy import BigInteger, Integer
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -11,6 +12,10 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.orm import DeclarativeBase
 
 from app.core.config import get_settings
+
+# MySQL 使用 BIGINT;SQLite(单测回退)下 BIGINT 主键不支持自增,
+# 统一通过 with_variant 保证两种数据库行为一致
+BigIntPK = BigInteger().with_variant(Integer, "sqlite")
 
 
 class Base(DeclarativeBase):

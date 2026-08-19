@@ -5,13 +5,27 @@ const router = createRouter({
   routes: [
     {
       path: '/',
-      name: 'match-center',
-      component: () => import('@/views/MatchCenterView.vue'),
+      redirect: '/match',
     },
     {
-      path: '/retrospect',
-      name: 'retrospect-center',
-      component: () => import('@/views/RetrospectCenterView.vue'),
+      path: '/base',
+      name: 'base-data',
+      component: () => import('@/views/base/BaseDataView.vue'),
+    },
+    {
+      path: '/match',
+      name: 'match-center',
+      component: () => import('@/views/match/MatchCenterView.vue'),
+    },
+    {
+      path: '/analytics',
+      name: 'analytics',
+      component: () => import('@/views/analytics/AnalyticsView.vue'),
+    },
+    {
+      path: '/strategy',
+      name: 'strategy',
+      component: () => import('@/views/strategy/StrategyView.vue'),
     },
   ],
 })

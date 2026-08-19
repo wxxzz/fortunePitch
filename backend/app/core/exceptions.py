@@ -6,6 +6,7 @@
 
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import IntegrityError
 
 
 class FortunePitchError(Exception):
@@ -67,6 +68,24 @@ async def fortune_pitch_exception_handler(
     )
 
 
+async def integrity_error_handler(
+    request: Request, exc: IntegrityError
+) -> JSONResponse:
+    """将数据库完整性约束失败(外键/唯一键)转为友好的 422 响应。"""
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={
+            "success": False,
+            "data": None,
+            "error": {
+                "message": "数据完整性约束失败:关联记录不存在或字段重复",
+                "detail": str(exc.orig),
+            },
+        },
+    )
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     """在 FastAPI 应用上注册统一异常处理器。"""
     app.add_exception_handler(FortunePitchError, fortune_pitch_exception_handler)  # type: ignore[arg-type]
+    app.add_exception_handler(IntegrityError, integrity_error_handler)  # type: ignore[arg-type]

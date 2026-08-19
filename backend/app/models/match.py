@@ -7,7 +7,6 @@ import datetime
 import enum
 
 from sqlalchemy import (
-    BigInteger,
     Boolean,
     DateTime,
     Enum,
@@ -17,7 +16,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.core.database import Base
+from app.core.database import Base, BigIntPK
 from app.models.base import League, Team
 
 
@@ -46,7 +45,7 @@ class MatchGame(Base):
         ForeignKey("fp_base_teams.team_id"), nullable=False
     )
     # 主裁判 ID(文档未定义裁判表,暂存外部编号)
-    referee_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    referee_id: Mapped[int | None] = mapped_column(BigIntPK, nullable=True)
     match_time: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
@@ -70,7 +69,7 @@ class MatchEvent(Base):
 
     __tablename__ = "fp_match_events"
 
-    event_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    event_id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
     match_id: Mapped[str] = mapped_column(
         ForeignKey("fp_match_games.match_id"), index=True, nullable=False
     )

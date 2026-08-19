@@ -6,10 +6,10 @@
 
 import datetime
 
-from sqlalchemy import BigInteger, Date, ForeignKey, Integer, Numeric, String
+from sqlalchemy import Date, ForeignKey, Integer, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.core.database import Base
+from app.core.database import Base, BigIntPK
 
 
 class League(Base):
@@ -17,7 +17,7 @@ class League(Base):
 
     __tablename__ = "fp_base_leagues"
 
-    league_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    league_id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
     league_name: Mapped[str] = mapped_column(String(128), nullable=False)
     country: Mapped[str] = mapped_column(String(64), nullable=False)
     # 联赛级别:1=顶级,2=次级
@@ -34,7 +34,7 @@ class Team(Base):
 
     __tablename__ = "fp_base_teams"
 
-    team_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    team_id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
     team_name: Mapped[str] = mapped_column(String(128), nullable=False)
     league_id: Mapped[int] = mapped_column(
         ForeignKey("fp_base_leagues.league_id"), index=True, nullable=False
@@ -54,7 +54,7 @@ class Player(Base):
 
     __tablename__ = "fp_base_players"
 
-    player_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    player_id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
     player_name: Mapped[str] = mapped_column(String(128), nullable=False)
     team_id: Mapped[int] = mapped_column(
         ForeignKey("fp_base_teams.team_id"), index=True, nullable=False

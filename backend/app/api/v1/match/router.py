@@ -1,0 +1,116 @@
+"""比赛与赛果模块路由:fp_match_ 两张表的增删查接口。"""
+
+from fastapi import APIRouter, Depends, Query, status
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.api.v1.match.schemas import (
+    MatchEventCreate,
+    MatchEventRead,
+    MatchGameCreate,
+    MatchGameRead,
+    MatchScoreUpdate,
+)
+from app.core.database import get_db_session
+from app.core.exceptions import DataValidationError
+from app.core.security import verify_api_key
+from app.models import MatchEvent, MatchGame, MatchStatus
+from app.services import crud
+
+router = APIRouter(prefix="/match", tags=["match"], dependencies=[Depends(verify_api_key)])
+
+
+# ---------- 比赛 /games ----------
+
+@router.post("/games", response_model=MatchGameRead, status_code=status.HTTP_201_CREATED)
+async def create_game(
+    payload: MatchGameCreate, session: AsyncSession = Depends(get_db_session)
+) -> MatchGame:
+    """新增比赛。
+
+    Raises:
+        DataValidationError: 主客队相同。
+    """
+    if payload.home_team_id == payload.away_team_id:
+        raise DataValidationError("主队与客队不能是同一支球队")
+    return await crud.create_entity(session, MatchGame, payload.model_dump())
+
+
+@router.get("/games", response_model=list[MatchGameRead])
+async def list_games(
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=20, ge=1, le=100),
+    session: AsyncSession = Depends(get_db_session),
+) -> list[MatchGame]:
+    """分页查询比赛列表。"""
+    return list(await crud.list_entities(session, MatchGame, offset, limit))
+
+
+@router.get("/games/{match_id}", response_model=MatchGameRead)
+async def get_game(match_id: str, session: AsyncSession = Depends(get_db_session)) -> MatchGame:
+    """按比赛编号查询。"""
+    return await crud.get_entity(session, MatchGame, match_id)
+
+
+@router.patch("/games/{match_id}/score", response_model=MatchGameRead)
+async def update_score(
+    match_id: str,
+    payload: MatchScoreUpdate,
+    session: AsyncSession = Depends(get_db_session),
+) -> MatchGame:
+    """录入完赛比分并将状态置为 FINISHED。"""
+    game = await crud.get_entity(session, MatchGame, match_id)
+    game.home_score = payload.home_score
+    game.away_score = payload.away_score
+    game.match_status = MatchStatus.FINISHED
+    await session.flush()
+    await session.refresh(game)
+    return game
+
+
+@router.delete("/games/{match_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_game(match_id: str, session: AsyncSession = Depends(get_db_session)) -> None:
+    """删除比赛。"""
+    await crud.delete_entity(session, MatchGame, match_id)
+
+
+# ---------- 比赛事件 /events ----------
+
+@router.post("/events", response_model=MatchEventRead, status_code=status.HTTP_201_CREATED)
+async def create_event(
+    payload: MatchEventCreate, session: AsyncSession = Depends(get_db_session)
+) -> MatchEvent:
+    """新增比赛事件(进球/红黄牌/换人)。"""
+    await crud.get_entity(session, MatchGame, payload.match_id)
+    return await crud.create_entity(session, MatchEvent, payload.model_dump())
+
+
+@router.get("/events", response_model=list[MatchEventRead])
+async def list_events(
+    match_id: str = Query(description="按比赛过滤"),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=100),
+    session: AsyncSession = Depends(get_db_session),
+) -> list[MatchEvent]:
+    """查询指定比赛的事件列表,按发生时间升序。"""
+    stmt = (
+        select(MatchEvent)
+        .where(MatchEvent.match_id == match_id)
+        .order_by(MatchEvent.event_minute)
+        .offset(offset)
+        .limit(limit)
+    )
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
+@router.delete("/events/{event_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_event(event_id: int, session: AsyncSession = Depends(get_db_session)) -> None:
+    """删除比赛事件。"""
+    await crud.delete_entity(session, MatchEvent, event_id)
+
+
+@router.get("/events/{event_id}", response_model=MatchEventRead, include_in_schema=False)
+async def get_event(event_id: int, session: AsyncSession = Depends(get_db_session)) -> MatchEvent:
+    """按 ID 查询事件。"""
+    return await crud.get_entity(session, MatchEvent, event_id)
