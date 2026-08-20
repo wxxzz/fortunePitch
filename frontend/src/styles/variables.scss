@@ -12,9 +12,24 @@ $color-border: #d9dee3;
 $color-text-primary: #1f2733;
 $color-text-secondary: #6b7480;
 
-// 语义色
+// 语义色(数据可视化规范:红=正向/利好,绿=负向/利空,灰=平局/中性)
+$color-positive: #d64541;
+$color-negative: #1e8e5a;
+$color-neutral: #8a929c;
+
+// 语义色(保留旧命名兼容)
 $color-danger: #c0392b;
 $color-warning: #d48806;
+
+// 深色侧边栏
+$color-sidebar-bg: #14231b;
+$color-sidebar-text: #9fb3a8;
+$color-sidebar-text-active: #ffffff;
+$color-sidebar-active-bg: rgba(255, 255, 255, 0.08);
+
+// 布局尺寸
+$sidebar-width: 220px;
+$topbar-height: 56px;
 
 // 字号
 $font-size-sm: 13px;

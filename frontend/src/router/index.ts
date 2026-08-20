@@ -13,19 +13,39 @@ const router = createRouter({
       component: () => import('@/views/base/BaseDataView.vue'),
     },
     {
+      path: '/collector',
+      name: 'collector',
+      component: () => import('@/views/collector/CollectorView.vue'),
+    },
+    {
       path: '/match',
       name: 'match-center',
       component: () => import('@/views/match/MatchCenterView.vue'),
     },
     {
-      path: '/analytics',
-      name: 'analytics',
-      component: () => import('@/views/analytics/AnalyticsView.vue'),
+      path: '/match/:matchId',
+      name: 'match-detail',
+      component: () => import('@/views/match/MatchDetailView.vue'),
+    },
+    {
+      path: '/teams',
+      name: 'team-profile',
+      component: () => import('@/views/team/TeamProfileView.vue'),
     },
     {
       path: '/strategy',
       name: 'strategy',
       component: () => import('@/views/strategy/StrategyView.vue'),
+    },
+    {
+      path: '/model',
+      name: 'data-model',
+      component: () => import('@/views/model/DataModelView.vue'),
+    },
+    {
+      path: '/retrospect',
+      name: 'user-dashboard',
+      component: () => import('@/views/retrospect/UserDashboardView.vue'),
     },
   ],
 })

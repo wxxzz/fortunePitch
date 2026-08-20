@@ -44,6 +44,17 @@ class DataValidationError(FortunePitchError):
         )
 
 
+class ExternalSourceError(FortunePitchError):
+    """外部数据源访问失败(网络超时、接口报错、响应结构异常)。"""
+
+    def __init__(self, message: str, detail: str | None = None) -> None:
+        super().__init__(
+            message=message,
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=detail,
+        )
+
+
 class UnauthorizedError(FortunePitchError):
     """API Key 校验失败。"""
 

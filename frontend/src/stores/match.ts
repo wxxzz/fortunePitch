@@ -19,6 +19,8 @@ export const useMatchStore = defineStore('match', () => {
   const selectedMatchId = ref<string | null>(null)
   const isLoading = ref(false)
   const error = ref<string | null>(null)
+  // 最近一次成功拉取比赛列表的时间戳(TopBar 数据更新时间展示用)
+  const gamesUpdatedAt = ref<number | null>(null)
 
   /** 拉取比赛列表 */
   async function fetchGames(): Promise<void> {
@@ -26,6 +28,7 @@ export const useMatchStore = defineStore('match', () => {
     error.value = null
     try {
       games.value = await listGames({ limit: 50 })
+      gamesUpdatedAt.value = Date.now()
     } catch (err) {
       error.value = err instanceof Error ? err.message : '比赛列表加载失败'
     } finally {
@@ -61,6 +64,7 @@ export const useMatchStore = defineStore('match', () => {
     selectedMatchId,
     isLoading,
     error,
+    gamesUpdatedAt,
     fetchGames,
     selectMatch,
     addGame,

@@ -17,9 +17,18 @@ onMounted(() => {
   void strategyStore.fetchAll()
 })
 
-/** 将欧赔历史按采集时间聚合为走势图数据 */
+/** 欧赔走势:后端赔率快照为单值(初盘/即时),尚无分项赔率,
+ * 无真实分项数据时展示演示走势 */
 const euroOddsTrend = computed<OddsTrendPoint[]>(() => {
   const euroRecords = oddsHistory.value.filter((o) => o.market_type === 'EURO_ODDS')
+  if (euroRecords.length === 0) {
+    return [
+      { time: 'T-5d', homeWin: 2.1, draw: 3.4, awayWin: 3.2 },
+      { time: 'T-3d', homeWin: 2.0, draw: 3.45, awayWin: 3.35 },
+      { time: 'T-1d', homeWin: 1.92, draw: 3.5, awayWin: 3.6 },
+      { time: '即时', homeWin: 1.88, draw: 3.55, awayWin: 3.7 },
+    ]
+  }
   return euroRecords.map((o) => ({
     time: new Date(o.update_time).toLocaleDateString(),
     homeWin: o.initial_value,
@@ -27,6 +36,10 @@ const euroOddsTrend = computed<OddsTrendPoint[]>(() => {
     awayWin: o.initial_value,
   }))
 })
+
+const hasRealOddsData = computed(
+  () => oddsHistory.value.filter((o) => o.market_type === 'EURO_ODDS').length > 0,
+)
 
 // 凯利计算表单(本地状态)
 const modelProb = ref<number>(0.55)
@@ -52,7 +65,7 @@ const statusLabel: Record<string, string> = {
 
     <h3 class="strategy-view__section-title">欧赔走势</h3>
     <OddsTrendChart v-if="euroOddsTrend.length > 0" :points="euroOddsTrend" />
-    <p v-else class="strategy-view__hint">暂无欧赔数据</p>
+    <p v-if="!hasRealOddsData" class="strategy-view__hint">演示数据 · 分项欧赔数据源接入后展示真实走势</p>
 
     <h3 class="strategy-view__section-title">AI 策略推荐(含归因标签)</h3>
     <table class="strategy-view__table">
