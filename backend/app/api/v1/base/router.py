@@ -69,10 +69,14 @@ async def create_team(
 async def list_teams(
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=20, ge=1, le=100),
+    league_id: int | None = Query(default=None, description="按所属联赛过滤"),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[Team]:
-    """分页查询球队列表。"""
-    return list(await crud.list_entities(session, Team, offset, limit))
+    """分页查询球队列表,支持按所属联赛过滤。"""
+    filters = {"league_id": league_id} if league_id is not None else None
+    return list(
+        await crud.list_entities(session, Team, offset, limit, filters=filters)
+    )
 
 
 @router.get("/teams/{team_id}", response_model=TeamRead)
@@ -101,10 +105,14 @@ async def create_player(
 async def list_players(
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=20, ge=1, le=100),
+    team_id: int | None = Query(default=None, description="按所属球队过滤"),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[Player]:
-    """分页查询球员列表。"""
-    return list(await crud.list_entities(session, Player, offset, limit))
+    """分页查询球员列表,支持按所属球队过滤。"""
+    filters = {"team_id": team_id} if team_id is not None else None
+    return list(
+        await crud.list_entities(session, Player, offset, limit, filters=filters)
+    )
 
 
 @router.get("/players/{player_id}", response_model=PlayerRead)

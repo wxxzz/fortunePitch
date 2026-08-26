@@ -11,6 +11,8 @@ from app.api.v1.strategy.schemas import (
     RecommendationRead,
     UserDecisionCreate,
     UserDecisionRead,
+    UserDecisionsBatchCreate,
+    UserDecisionsBatchResult,
     STRATEGY_TYPES,
     KellyRequest,
     KellyResponse,
@@ -21,6 +23,7 @@ from app.core.security import verify_api_key
 from app.models import MatchGame, OddsHistory, Recommendation, UserDecision
 from app.services import crud
 from app.services.poisson import kelly_fraction
+from app.services.user_picks import UserPick, create_user_picks
 
 router = APIRouter(
     prefix="/strategy", tags=["strategy"], dependencies=[Depends(verify_api_key)]
@@ -114,7 +117,9 @@ async def delete_recommendation(
 # ---------- 用户决策(模拟)/user-decisions ----------
 
 @router.post(
-    "/user-decisions", response_model=UserDecisionRead, status_code=status.HTTP_201_CREATED
+    "/user-decisions",
+    response_model=UserDecisionRead,
+    status_code=status.HTTP_201_CREATED,
 )
 async def create_user_decision(
     payload: UserDecisionCreate, session: AsyncSession = Depends(get_db_session)
@@ -122,6 +127,42 @@ async def create_user_decision(
     """录入用户模拟决策(用于复盘与战绩统计,不涉及真实资金)。"""
     await crud.get_entity(session, Recommendation, payload.recommend_id)
     return await crud.create_entity(session, UserDecision, payload.model_dump())
+
+
+@router.post(
+    "/user-decisions/batch",
+    response_model=UserDecisionsBatchResult,
+    status_code=status.HTTP_201_CREATED,
+    summary="批量创建用户自选模拟决策",
+)
+async def create_user_decisions_batch(
+    payload: UserDecisionsBatchCreate, session: AsyncSession = Depends(get_db_session)
+) -> UserDecisionsBatchResult:
+    """赛事中心自选玩法确认入口:逐条创建模拟决策。
+
+    每条自选会先生成一条 confidence_score=0 的"用户自选"推荐记录
+    (决策表外键依赖),再创建对应的模拟决策。
+    """
+    decisions = await create_user_picks(
+        session,
+        user_id=payload.user_id,
+        stake_amount=payload.stake_amount,
+        picks=[
+            UserPick(
+                match_id=s.match_id,
+                pool_code=s.pool_code,
+                option_code=s.option_code,
+                option_label=s.option_label,
+            )
+            for s in payload.selections
+        ],
+    )
+    return UserDecisionsBatchResult(
+        decision_count=len(decisions),
+        decisions=[
+            UserDecisionRead.model_validate(decision) for decision in decisions
+        ],
+    )
 
 
 @router.get("/user-decisions", response_model=list[UserDecisionRead])

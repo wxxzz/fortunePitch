@@ -113,6 +113,54 @@ class TestBaseModule:
         assert player.status_code == 201
         assert player.json()["position"] == "CAM"
 
+    async def test_list_filters_by_parent(self, client: AsyncClient) -> None:
+        """球队列表按联赛过滤、球员列表按球队过滤。"""
+        league_a = (
+            await client.post(
+                "/api/v1/base/leagues", json={"league_name": "西甲", "country": "西班牙"}
+            )
+        ).json()
+        league_b = (
+            await client.post(
+                "/api/v1/base/leagues", json={"league_name": "英超", "country": "英格兰"}
+            )
+        ).json()
+        team_a = (
+            await client.post(
+                "/api/v1/base/teams",
+                json={"team_name": "皇马", "league_id": league_a["league_id"]},
+            )
+        ).json()
+        team_b = (
+            await client.post(
+                "/api/v1/base/teams",
+                json={"team_name": "阿森纳", "league_id": league_b["league_id"]},
+            )
+        ).json()
+        await client.post(
+            "/api/v1/base/players",
+            json={"player_name": "贝林厄姆", "team_id": team_a["team_id"]},
+        )
+        await client.post(
+            "/api/v1/base/players",
+            json={"player_name": "萨卡", "team_id": team_b["team_id"]},
+        )
+
+        teams_in_a = await client.get(
+            "/api/v1/base/teams", params={"league_id": league_a["league_id"]}
+        )
+        assert teams_in_a.status_code == 200
+        assert [t["team_name"] for t in teams_in_a.json()] == ["皇马"]
+
+        players_in_a = await client.get(
+            "/api/v1/base/players", params={"team_id": team_a["team_id"]}
+        )
+        assert players_in_a.status_code == 200
+        assert [p["player_name"] for p in players_in_a.json()] == ["贝林厄姆"]
+
+        all_teams = await client.get("/api/v1/base/teams")
+        assert len(all_teams.json()) == 2
+
 
 class TestMatchModule:
     """比赛与赛果模块(/api/v1/match)测试。"""
@@ -316,6 +364,95 @@ class TestStrategyModule:
         )
         assert decision.status_code == 201
         assert decision.json()["result_status"] == "PUSH"
+
+    async def test_user_decisions_batch_creates_picks(self, client: AsyncClient) -> None:
+        """POST /user-decisions/batch:自选玩法 -> 用户自选推荐 + 模拟决策。"""
+        league = (
+            await client.post(
+                "/api/v1/base/leagues", json={"league_name": "英超", "country": "英格兰"}
+            )
+        ).json()
+        home = (
+            await client.post(
+                "/api/v1/base/teams",
+                json={"team_name": "阿森纳", "league_id": league["league_id"]},
+            )
+        ).json()
+        away = (
+            await client.post(
+                "/api/v1/base/teams",
+                json={"team_name": "热刺", "league_id": league["league_id"]},
+            )
+        ).json()
+        await client.post(
+            "/api/v1/match/games",
+            json={
+                "match_id": "m-pick",
+                "match_time": TEST_TIME.isoformat(),
+                "league_id": league["league_id"],
+                "home_team_id": home["team_id"],
+                "away_team_id": away["team_id"],
+            },
+        )
+
+        response = await client.post(
+            "/api/v1/strategy/user-decisions/batch",
+            json={
+                "user_id": 1,
+                "stake_amount": 50.0,
+                "selections": [
+                    {
+                        "match_id": "m-pick",
+                        "pool_code": "HAD",
+                        "option_code": "h",
+                        "option_label": "主胜",
+                    },
+                    {
+                        "match_id": "m-pick",
+                        "pool_code": "TTG",
+                        "option_code": "s2",
+                        "option_label": "2",
+                    },
+                ],
+            },
+        )
+        assert response.status_code == 201
+        body = response.json()
+        assert body["decision_count"] == 2
+        assert [d["user_bet_type"] for d in body["decisions"]] == ["HAD:h", "TTG:s2"]
+        assert all(d["stake_amount"] == 50.0 for d in body["decisions"])
+
+        # 每条决策挂靠一条“用户自选”推荐记录
+        recs = (
+            await client.get(
+                "/api/v1/strategy/recommendations", params={"match_id": "m-pick"}
+            )
+        ).json()
+        assert len(recs) == 2
+        assert all(r["logic_tags"] == ["用户自选"] for r in recs)
+        assert all(r["confidence_score"] == 0.0 for r in recs)
+        assert {r["predicted_outcome"] for r in recs} == {"主胜", "2"}
+        assert {r["strategy_type"] for r in recs} == {"WIN_DRAW_LOSS", "TOTAL_GOALS"}
+
+    async def test_user_decisions_batch_rejects_bad_pool(
+        self, client: AsyncClient
+    ) -> None:
+        response = await client.post(
+            "/api/v1/strategy/user-decisions/batch",
+            json={
+                "user_id": 1,
+                "stake_amount": 50.0,
+                "selections": [
+                    {
+                        "match_id": "no-such-match",
+                        "pool_code": "XX",
+                        "option_code": "h",
+                        "option_label": "主胜",
+                    },
+                ],
+            },
+        )
+        assert response.status_code == 422
 
     async def test_recommendation_rejects_unknown_strategy_type(
         self, client: AsyncClient

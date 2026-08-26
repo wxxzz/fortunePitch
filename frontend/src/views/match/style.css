@@ -1,0 +1,234 @@
+/* --- 全局重置与变量 --- */
+:root {
+    --primary-blue: #1677ff;
+    --bg-color: #f0f2f5;
+    --card-bg: #ffffff;
+    --text-main: #333333;
+    --text-sub: #8c8c8c;
+    --border-color: #e8e8e8;
+    --hover-bg: #f5faff;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+    background-color: var(--bg-color);
+    color: var(--text-main);
+    line-height: 1.5;
+}
+
+/* --- 容器 --- */
+.container {
+    max-width: 800px; /* 限制最大宽度，模拟手机/平板体验 */
+    margin: 0 auto;
+    padding: 0 15px;
+}
+
+/* --- 顶部导航 --- */
+.top-nav {
+    background-color: var(--card-bg);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+    padding: 15px 0;
+    margin-bottom: 20px;
+}
+
+.nav-container {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.logo {
+    font-size: 18px;
+    font-weight: bold;
+    color: var(--primary-blue);
+}
+
+.nav-links a {
+    text-decoration: none;
+    color: var(--text-main);
+    margin-left: 20px;
+    font-size: 14px;
+}
+
+.nav-links a.active {
+    color: var(--primary-blue);
+    font-weight: bold;
+}
+
+/* --- 比赛卡片 --- */
+.match-card {
+    background: var(--card-bg);
+    border-radius: 12px;
+    padding: 20px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.03);
+    margin-bottom: 20px;
+}
+
+.match-header {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    color: var(--text-sub);
+    margin-bottom: 20px;
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 10px;
+}
+
+.league-tag {
+    color: var(--primary-blue);
+    font-weight: bold;
+    border: 1px solid var(--primary-blue);
+    padding: 0 4px;
+    border-radius: 4px;
+}
+
+/* --- 对阵双方 --- */
+.match-teams {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 25px;
+}
+
+.team {
+    text-align: center;
+    width: 35%;
+}
+
+.team .rank {
+    display: block;
+    font-size: 12px;
+    color: var(--text-sub);
+    margin-bottom: 5px;
+}
+
+.team .name {
+    font-size: 18px;
+    font-weight: bold;
+}
+
+.vs-box {
+    text-align: center;
+    width: 30%;
+}
+
+.vs-text {
+    font-size: 20px;
+    font-weight: bold;
+    color: #ccc;
+    display: block;
+}
+
+.status {
+    font-size: 12px;
+    color: var(--primary-blue);
+    background: #e6f7ff;
+    padding: 2px 8px;
+    border-radius: 10px;
+    margin-top: 5px;
+    display: inline-block;
+}
+
+/* --- Tab 切换按钮 --- */
+.odds-tabs {
+    display: flex;
+    gap: 10px;
+    overflow-x: auto; /* 允许横向滚动 */
+    padding-bottom: 5px;
+}
+
+.tab-btn {
+    background: none;
+    border: 1px solid var(--border-color);
+    padding: 6px 12px;
+    border-radius: 20px;
+    font-size: 13px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.3s;
+    color: var(--text-main);
+}
+
+.tab-btn.active {
+    background-color: var(--primary-blue);
+    color: white;
+    border-color: var(--primary-blue);
+}
+
+/* --- 数据面板区域 --- */
+.tab-pane {
+    display: none; /* 默认隐藏 */
+    animation: fadeIn 0.3s ease;
+}
+
+.tab-pane.active {
+    display: block; /* 激活时显示 */
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(5px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.sub-header {
+    font-size: 12px;
+    color: var(--text-sub);
+    margin-bottom: 10px;
+    text-align: center;
+}
+
+/* --- 网格布局系统 --- */
+.grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+.grid-6 { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; }
+
+/* --- 赔率格子样式 --- */
+.odds-item {
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 10px 5px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.2s;
+    background: white;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+
+.odds-item:hover {
+    border-color: var(--primary-blue);
+    background-color: var(--hover-bg);
+    transform: translateY(-2px);
+    box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+}
+
+.odds-item .label {
+    display: block;
+    font-size: 12px;
+    color: var(--text-sub);
+    margin-bottom: 4px;
+}
+
+.odds-item .value {
+    display: block;
+    font-size: 15px;
+    font-weight: bold;
+    color: var(--primary-blue);
+}
+
+/* 小尺寸格子适配 */
+.odds-item.small .label { font-size: 10px; }
+.odds-item.small .value { font-size: 12px; }
+
+.odds-item.tiny { padding: 5px 2px; }
+.odds-item.tiny .label { font-size: 10px; margin-bottom: 2px; }
+.odds-item.tiny .value { font-size: 11px; }
+
+/* 响应式调整 */
+@media (max-width: 600px) {
+    .grid-6 { grid-template-columns: repeat(4, 1fr); }
+    .team .name { font-size: 16px; }
+}

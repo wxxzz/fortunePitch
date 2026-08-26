@@ -23,8 +23,13 @@ export interface PlayerCreateParams {
   market_value?: number | null
 }
 
-/** 分页查询球员列表 */
-export async function listPlayers(params: PageParams = {}): Promise<Player[]> {
+/** 球员列表查询参数(支持按所属球队过滤) */
+export interface PlayerListParams extends PageParams {
+  team_id?: number
+}
+
+/** 分页查询球员列表,可按所属球队过滤 */
+export async function listPlayers(params: PlayerListParams = {}): Promise<Player[]> {
   const { data } = await request.get<Player[]>('/api/v1/base/players', { params })
   return data
 }

@@ -23,8 +23,13 @@ export interface TeamCreateParams {
   formation?: string | null
 }
 
-/** 分页查询球队列表 */
-export async function listTeams(params: PageParams = {}): Promise<Team[]> {
+/** 球队列表查询参数(支持按所属联赛过滤) */
+export interface TeamListParams extends PageParams {
+  league_id?: number
+}
+
+/** 分页查询球队列表,可按所属联赛过滤 */
+export async function listTeams(params: TeamListParams = {}): Promise<Team[]> {
   const { data } = await request.get<Team[]>('/api/v1/base/teams', { params })
   return data
 }

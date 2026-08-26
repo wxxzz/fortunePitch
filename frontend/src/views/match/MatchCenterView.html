@@ -1,0 +1,810 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>赛事中心 - 混合过关</title>
+    <style>
+        :root {
+            --primary-color: #667eea;
+            --secondary-color: #764ba2;
+            --bg-color: #f5f7fa;
+            --card-bg: #ffffff;
+            --text-main: #333333;
+            --text-sub: #666666;
+            --border-color: #e0e0e0;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            line-height: 1.5;
+            padding-bottom: 120px; /* 为底部栏留出空间 */
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .page-header {
+            text-align: center;
+            margin-bottom: 25px;
+        }
+
+        .page-title {
+            font-size: 28px;
+            font-weight: 800;
+            background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 8px;
+        }
+
+        .page-subtitle {
+            font-size: 14px;
+            color: var(--text-sub);
+        }
+
+        /* 赛事卡片 */
+        .match-card {
+            background: var(--card-bg);
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+            margin-bottom: 20px;
+            overflow: hidden;
+            transition: transform 0.2s;
+        }
+
+        .match-header {
+            background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+            color: white;
+            padding: 15px 20px;
+            position: relative;
+        }
+
+        .match-meta {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            opacity: 0.9;
+            margin-bottom: 10px;
+        }
+
+        .teams-container {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 0;
+        }
+
+        .team-name {
+            font-size: 18px;
+            font-weight: 600;
+            width: 40%;
+            text-align: center;
+        }
+
+        .vs-badge {
+            font-size: 14px;
+            font-weight: bold;
+            background: rgba(255,255,255,0.2);
+            padding: 4px 12px;
+            border-radius: 20px;
+        }
+
+        /* 玩法标签 */
+        .play-tabs {
+            display: flex;
+            background: #f8f9fa;
+            border-bottom: 1px solid var(--border-color);
+            overflow-x: auto;
+            scrollbar-width: none; /* Firefox */
+        }
+        
+        .play-tabs::-webkit-scrollbar {
+            display: none; /* Chrome/Safari */
+        }
+
+        .tab-item {
+            padding: 12px 16px;
+            font-size: 14px;
+            color: var(--text-sub);
+            cursor: pointer;
+            white-space: nowrap;
+            border-bottom: 2px solid transparent;
+            transition: all 0.3s;
+        }
+
+        .tab-item.active {
+            color: var(--primary-color);
+            border-bottom-color: var(--primary-color);
+            font-weight: 600;
+            background: white;
+        }
+
+        /* 玩法内容区 */
+        .play-content {
+            padding: 15px;
+        }
+
+        .play-panel {
+            display: none;
+        }
+
+        .play-panel.active {
+            display: block;
+            animation: fadeIn 0.3s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(5px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .section-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-sub);
+            margin-bottom: 10px;
+            border-left: 3px solid var(--primary-color);
+            padding-left: 8px;
+        }
+
+        .options-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+
+        .option-btn {
+            background: white;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 10px 5px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .option-btn:hover {
+            border-color: var(--primary-color);
+            transform: translateY(-2px);
+            box-shadow: 0 2px 8px rgba(102, 126, 234, 0.15);
+        }
+
+        .option-btn.selected {
+            background: var(--primary-color);
+            border-color: var(--primary-color);
+            color: white;
+        }
+
+        .opt-label {
+            font-size: 13px;
+            margin-bottom: 4px;
+        }
+
+        .opt-odds {
+            font-size: 15px;
+            font-weight: 700;
+            color: #ff6b6b;
+        }
+
+        .option-btn.selected .opt-odds {
+            color: white;
+        }
+
+        /* 底部投注栏 */
+        .bet-bar {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: white;
+            box-shadow: 0 -4px 20px rgba(0,0,0,0.1);
+            z-index: 1000;
+            padding: 15px;
+            transform: translateY(100%);
+            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .bet-bar.visible {
+            transform: translateY(0);
+        }
+
+        .bet-bar-inner {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .bet-summary-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .count-badge {
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .count-num {
+            color: var(--primary-color);
+            font-size: 18px;
+            margin: 0 4px;
+        }
+
+        .clear-link {
+            font-size: 13px;
+            color: #999;
+            cursor: pointer;
+            text-decoration: underline;
+        }
+
+        .selected-tags {
+            display: flex;
+            gap: 8px;
+            overflow-x: auto;
+            padding-bottom: 10px;
+            margin-bottom: 10px;
+            scrollbar-width: thin;
+        }
+
+        .tag {
+            background: #f0f2ff;
+            color: var(--primary-color);
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            white-space: nowrap;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .tag-close {
+            cursor: pointer;
+            font-weight: bold;
+            opacity: 0.6;
+        }
+        
+        .tag-close:hover {
+            opacity: 1;
+        }
+
+        .action-row {
+            display: flex;
+            gap: 10px;
+        }
+
+        .mode-group {
+            display: flex;
+            background: #f5f5f5;
+            border-radius: 8px;
+            padding: 2px;
+        }
+
+        .mode-btn {
+            padding: 8px 16px;
+            border: none;
+            background: transparent;
+            border-radius: 6px;
+            font-size: 13px;
+            cursor: pointer;
+            color: var(--text-sub);
+            transition: all 0.2s;
+        }
+
+        .mode-btn.active {
+            background: white;
+            color: var(--primary-color);
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+            font-weight: 600;
+        }
+
+        .submit-btn {
+            flex: 1;
+            background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: opacity 0.2s;
+        }
+
+        .submit-btn:active {
+            opacity: 0.9;
+        }
+
+        /* 弹窗 */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 2000;
+            display: none;
+            justify-content: center;
+            align-items: center;
+            backdrop-filter: blur(4px);
+        }
+
+        .modal-overlay.show {
+            display: flex;
+        }
+
+        .modal-content {
+            background: white;
+            width: 90%;
+            max-width: 500px;
+            max-height: 80vh;
+            border-radius: 16px;
+            padding: 24px;
+            overflow-y: auto;
+            animation: slideUp 0.3s ease;
+        }
+
+        @keyframes slideUp {
+            from { transform: translateY(20px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+
+        .modal-title {
+            font-size: 20px;
+            font-weight: 700;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+
+        .detail-item {
+            background: #f8f9fa;
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            font-size: 14px;
+        }
+
+        .detail-match {
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        .detail-info {
+            display: flex;
+            justify-content: space-between;
+            color: var(--text-sub);
+        }
+
+        .total-section {
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 1px dashed var(--border-color);
+            text-align: center;
+        }
+
+        .total-label {
+            font-size: 14px;
+            color: var(--text-sub);
+        }
+
+        .total-value {
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--primary-color);
+            margin-top: 5px;
+        }
+
+        .modal-actions {
+            display: flex;
+            gap: 12px;
+            margin-top: 24px;
+        }
+
+        .btn {
+            flex: 1;
+            padding: 12px;
+            border-radius: 8px;
+            border: none;
+            font-size: 16px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+
+        .btn-cancel {
+            background: #f5f5f5;
+            color: var(--text-sub);
+        }
+
+        .btn-confirm {
+            background: var(--primary-color);
+            color: white;
+        }
+
+        /* 响应式调整 */
+        @media (max-width: 480px) {
+            .team-name { font-size: 15px; }
+            .options-grid { grid-template-columns: repeat(3, 1fr); }
+            .action-row { flex-direction: column; }
+            .mode-group { width: 100%; justify-content: space-between; }
+            .mode-btn { flex: 1; text-align: center; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="page-header">
+        <h1 class="page-title">⚽ 赛事中心</h1>
+        <p class="page-subtitle">支持多场赛事选择 · 混合过关模式</p>
+    </div>
+
+    <div id="matchesList">
+        <!-- 赛事列表将通过JS渲染 -->
+    </div>
+</div>
+
+<!-- 底部投注栏 -->
+<div class="bet-bar" id="betBar">
+    <div class="bet-bar-inner">
+        <div class="bet-summary-row">
+            <div class="count-badge">已选 <span class="count-num" id="selectCount">0</span> 项</div>
+            <div class="clear-link" onclick="clearAll()">清空</div>
+        </div>
+        
+        <div class="selected-tags" id="selectedTags">
+            <!-- 标签动态生成 -->
+        </div>
+
+        <div class="action-row">
+            <div class="mode-group">
+                <button class="mode-btn active" data-mode="single" onclick="setMode('single')">单关</button>
+                <button class="mode-btn" data-mode="parlay" onclick="setMode('parlay')">串关</button>
+                <button class="mode-btn" data-mode="mixed" onclick="setMode('mixed')">混合</button>
+            </div>
+            <button class="submit-btn" onclick="openModal()">查看投注</button>
+        </div>
+    </div>
+</div>
+
+<!-- 详情弹窗 -->
+<div class="modal-overlay" id="detailModal" onclick="closeModal(event)">
+    <div class="modal-content" onclick="event.stopPropagation()">
+        <div class="modal-title">📋 投注确认</div>
+        <div id="modalBody"></div>
+        <div class="total-section">
+            <div class="total-label">预计总赔率</div>
+            <div class="total-value" id="totalOddsDisplay">0.00</div>
+        </div>
+        <div class="modal-actions">
+            <button class="btn btn-cancel" onclick="closeModal()">取消</button>
+            <button class="btn btn-confirm" onclick="confirmBet()">确认投注</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    // 模拟数据
+    const matchesData = [
+        {
+            id: '001',
+            league: '英超',
+            time: '今天 20:00',
+            home: '曼联',
+            away: '利物浦',
+            plays: {
+                'wdl': {
+                    name: '胜平负',
+                    options: [
+                        { label: '主胜', odds: 2.15 },
+                        { label: '平局', odds: 3.40 },
+                        { label: '主负', odds: 3.20 }
+                    ]
+                },
+                'handicap': {
+                    name: '让球(+1)',
+                    options: [
+                        { label: '主胜', odds: 1.55 },
+                        { label: '平局', odds: 3.80 },
+                        { label: '主负', odds: 5.50 }
+                    ]
+                },
+                'goals': {
+                    name: '进球数',
+                    options: [
+                        { label: '0', odds: 8.50 },
+                        { label: '1', odds: 4.20 },
+                        { label: '2', odds: 3.10 },
+                        { label: '3', odds: 3.50 },
+                        { label: '4+', odds: 4.00 }
+                    ]
+                }
+            }
+        },
+        {
+            id: '002',
+            league: '西甲',
+            time: '今天 22:00',
+            home: '皇马',
+            away: '巴萨',
+            plays: {
+                'wdl': {
+                    name: '胜平负',
+                    options: [
+                        { label: '主胜', odds: 2.30 },
+                        { label: '平局', odds: 3.20 },
+                        { label: '主负', odds: 3.10 }
+                    ]
+                },
+                'score': {
+                    name: '比分',
+                    options: [
+                        { label: '1:0', odds: 7.00 },
+                        { label: '2:1', odds: 7.50 },
+                        { label: '1:1', odds: 6.50 },
+                        { label: '0:0', odds: 9.00 },
+                        { label: '0:1', odds: 8.00 },
+                        { label: '1:2', odds: 8.50 }
+                    ]
+                }
+            }
+        },
+        {
+            id: '003',
+            league: '意甲',
+            time: '明天 01:00',
+            home: '尤文',
+            away: 'AC米兰',
+            plays: {
+                'wdl': {
+                    name: '胜平负',
+                    options: [
+                        { label: '主胜', odds: 1.95 },
+                        { label: '平局', odds: 3.50 },
+                        { label: '主负', odds: 3.80 }
+                    ]
+                },
+                'half': {
+                    name: '半全场',
+                    options: [
+                        { label: '胜胜', odds: 3.20 },
+                        { label: '平平', odds: 5.20 },
+                        { label: '负负', odds: 6.50 },
+                        { label: '胜负', odds: 15.00 }
+                    ]
+                }
+            }
+        }
+    ];
+
+    // 状态管理
+    let selections = {}; // 存储格式: { 'id_play_label': { matchId, playKey, label, odds, matchName } }
+    let currentMode = 'single';
+
+    // 初始化
+    function init() {
+        renderMatches();
+    }
+
+    // 渲染赛事列表
+    function renderMatches() {
+        const container = document.getElementById('matchesList');
+        let html = '';
+
+        matchesData.forEach((match, mIndex) => {
+            // 生成玩法标签
+            const playKeys = Object.keys(match.plays);
+            let tabsHtml = playKeys.map((key, i) => 
+                `<div class="tab-item ${i===0?'active':''}" onclick="switchTab(this, '${match.id}', '${key}')">${match.plays[key].name}</div>`
+            ).join('');
+
+            // 生成玩法面板
+            let panelsHtml = playKeys.map((key, i) => {
+                const play = match.plays[key];
+                let optionsHtml = play.options.map(opt => {
+                    const uniqueId = `${match.id}_${key}_${opt.label}`;
+                    return `
+                        <div class="option-btn" id="btn_${uniqueId}" onclick="toggleOption('${uniqueId}', '${match.id}', '${key}', '${opt.label}', ${opt.odds}, '${match.home} vs ${match.away}')">
+                            <div class="opt-label">${opt.label}</div>
+                            <div class="opt-odds">${opt.odds.toFixed(2)}</div>
+                        </div>
+                    `;
+                }).join('');
+
+                return `
+                    <div class="play-panel ${i===0?'active':''}" id="panel_${match.id}_${key}">
+                        <div class="options-grid">
+                            ${optionsHtml}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            html += `
+                <div class="match-card" id="match_${match.id}">
+                    <div class="match-header">
+                        <div class="match-meta">
+                            <span>${match.league} | 编号 ${match.id}</span>
+                            <span>${match.time}</span>
+                        </div>
+                        <div class="teams-container">
+                            <div class="team-name">${match.home}</div>
+                            <div class="vs-badge">VS</div>
+                            <div class="team-name">${match.away}</div>
+                        </div>
+                    </div>
+                    <div class="play-tabs">
+                        ${tabsHtml}
+                    </div>
+                    <div class="play-content">
+                        ${panelsHtml}
+                    </div>
+                </div>
+            `;
+        });
+
+        container.innerHTML = html;
+    }
+
+    // 切换玩法标签
+    window.switchTab = function(el, matchId, playKey) {
+        // 处理标签样式
+        const parent = el.parentElement;
+        Array.from(parent.children).forEach(child => child.classList.remove('active'));
+        el.classList.add('active');
+
+        // 处理面板显示
+        const card = document.getElementById(`match_${matchId}`);
+        const panels = card.querySelectorAll('.play-panel');
+        panels.forEach(p => p.classList.remove('active'));
+        
+        const targetPanel = document.getElementById(`panel_${matchId}_${playKey}`);
+        if(targetPanel) targetPanel.classList.add('active');
+    };
+
+    // 切换选项选中状态
+    window.toggleOption = function(uniqueId, matchId, playKey, label, odds, matchName) {
+        const btn = document.getElementById(`btn_${uniqueId}`);
+        
+        if (selections[uniqueId]) {
+            // 取消选中
+            delete selections[uniqueId];
+            btn.classList.remove('selected');
+        } else {
+            // 选中
+            selections[uniqueId] = {
+                matchId, playKey, label, odds, matchName
+            };
+            btn.classList.add('selected');
+        }
+        
+        updateBetBar();
+    };
+
+    // 更新底部栏
+    function updateBetBar() {
+        const keys = Object.keys(selections);
+        const count = keys.length;
+        const bar = document.getElementById('betBar');
+        const countEl = document.getElementById('selectCount');
+        const tagsContainer = document.getElementById('selectedTags');
+
+        countEl.textContent = count;
+
+        if (count > 0) {
+            bar.classList.add('visible');
+            
+            // 生成标签
+            tagsContainer.innerHTML = keys.map(key => {
+                const item = selections[key];
+                return `
+                    <div class="tag">
+                        ${item.matchName} - ${item.label}
+                        <span class="tag-close" onclick="removeSelection('${key}')">×</span>
+                    </div>
+                `;
+            }).join('');
+        } else {
+            bar.classList.remove('visible');
+            tagsContainer.innerHTML = '';
+        }
+    }
+
+    // 移除单个选项
+    window.removeSelection = function(uniqueId) {
+        const btn = document.getElementById(`btn_${uniqueId}`);
+        if(btn) btn.classList.remove('selected');
+        delete selections[uniqueId];
+        updateBetBar();
+    };
+
+    // 清空所有
+    window.clearAll = function() {
+        Object.keys(selections).forEach(key => {
+            const btn = document.getElementById(`btn_${key}`);
+            if(btn) btn.classList.remove('selected');
+        });
+        selections = {};
+        updateBetBar();
+    };
+
+    // 设置模式
+    window.setMode = function(mode) {
+        currentMode = mode;
+        document.querySelectorAll('.mode-btn').forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.mode === mode);
+        });
+    };
+
+    // 打开弹窗
+    window.openModal = function() {
+        const keys = Object.keys(selections);
+        if (keys.length === 0) return;
+
+        const modalBody = document.getElementById('modalBody');
+        let totalOdds = 1;
+        let html = '';
+
+        keys.forEach(key => {
+            const item = selections[key];
+            totalOdds *= item.odds;
+            html += `
+                <div class="detail-item">
+                    <div class="detail-match">${item.matchName}</div>
+                    <div class="detail-info">
+                        <span>${item.label}</span>
+                        <span style="color:#ff6b6b; font-weight:bold">@${item.odds.toFixed(2)}</span>
+                    </div>
+                </div>
+            `;
+        });
+
+        modalBody.innerHTML = html;
+        
+        // 计算显示赔率
+        let displayOdds = 0;
+        if (currentMode === 'single') {
+            document.getElementById('totalOddsDisplay').textContent = '单关独立计算';
+        } else {
+            document.getElementById('totalOddsDisplay').textContent = totalOdds.toFixed(2);
+        }
+
+        document.getElementById('detailModal').classList.add('show');
+    };
+
+    // 关闭弹窗
+    window.closeModal = function(e) {
+        if (!e || e.target.id === 'detailModal') {
+            document.getElementById('detailModal').classList.remove('show');
+        }
+    };
+
+    // 确认投注
+    window.confirmBet = function() {
+        alert(`投注成功！\n模式：${currentMode === 'single' ? '单关' : currentMode === 'parlay' ? '串关' : '混合过关'}\n共 ${Object.keys(selections).length} 项`);
+        closeModal();
+        clearAll();
+    };
+
+    // 启动
+    init();
+</script>
+
+</body>
+</html>

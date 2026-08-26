@@ -5,8 +5,10 @@
 
 import datetime
 import enum
+import typing
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     DateTime,
     Enum,
@@ -62,6 +64,29 @@ class MatchGame(Base):
     home_team: Mapped["Team"] = relationship(foreign_keys=[home_team_id])
     away_team: Mapped["Team"] = relationship(foreign_keys=[away_team_id])
     events: Mapped[list["MatchEvent"]] = relationship(back_populates="game")
+    odds: Mapped["MatchOdds | None"] = relationship(back_populates="game")
+
+
+class MatchOdds(Base):
+    """比赛玩法赔率表(fp_match_odds):竞彩在售 5 种玩法的即时赔率。
+
+    每场比赛一行,``pools`` 为归一化玩法列表(由采集模块写入):
+    ``[{"poolCode": "HAD", "playName": "胜平负", "goalLine": "-1",
+    "options": [{"code": "h", "label": "主胜", "odds": 2.15}, ...]}, ...]``。
+    历史赔率轨迹另由 fp_strategy_odds_history 承载。
+    """
+
+    __tablename__ = "fp_match_odds"
+
+    match_id: Mapped[str] = mapped_column(
+        ForeignKey("fp_match_games.match_id"), primary_key=True
+    )
+    pools: Mapped[list[dict[str, typing.Any]]] = mapped_column(JSON, nullable=False)
+    update_time: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=datetime.datetime.now
+    )
+
+    game: Mapped["MatchGame"] = relationship(back_populates="odds")
 
 
 class MatchEvent(Base):

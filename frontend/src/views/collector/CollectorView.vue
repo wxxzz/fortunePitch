@@ -1,62 +1,135 @@
 <script setup lang="ts">
 /**
- * 数据采集视图:从中国竞彩网联赛资料同步联赛信息。
+ * 数据采集视图:从中国竞彩网同步 联赛 / 球队 / 球员 档案与在售赛程。
  *
- * 当前支持按联赛名称手动触发同步(先支持西甲,其他联赛按需输入名称),
- * 同步结果幂等写入联赛档案表。
+ * 档案类同步按联赛名称手动触发,后端幂等 upsert;
+ * 球队/球员同步会自动先同步联赛档案,可独立执行。
+ * 赛事同步按售卖日触发,来源为竞彩网赛程赛果页。
  */
 import { computed, onMounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
-import { syncLeague, type LeagueSyncResult } from '@/api/collector/league'
+import {
+  syncLeague,
+  syncPlayers,
+  syncTeams,
+  type LeagueSyncResult,
+  type PlayerSyncResult,
+  type TeamSyncResult,
+} from '@/api/collector/league'
+import { syncMatches, type MatchSyncResult } from '@/api/collector/match'
 import { useBaseStore } from '@/stores/base'
 
 const baseStore = useBaseStore()
-const { leagues, isLoading } = storeToRefs(baseStore)
+const { leagues, teams, players, isLoading } = storeToRefs(baseStore)
+
+type SyncKind = 'league' | 'team' | 'player' | 'match'
 
 const leagueName = ref('西甲')
+const matchDate = ref(todayIso())
 const isSyncing = ref(false)
+/** 当前正在执行的同步类型(用于按钮态与提示文案) */
+const syncingKind = ref<SyncKind | null>(null)
 const syncError = ref<string | null>(null)
-const syncResult = ref<LeagueSyncResult | null>(null)
+
+const leagueResult = ref<LeagueSyncResult | null>(null)
+const teamResult = ref<TeamSyncResult | null>(null)
+const playerResult = ref<PlayerSyncResult | null>(null)
+const matchResult = ref<MatchSyncResult | null>(null)
 
 /** 快捷入口:竞彩网热门联赛简称 */
 const QUICK_LEAGUES = ['西甲', '英超', '德甲', '意甲', '法甲'] as const
 
 const canSubmit = computed(() => leagueName.value.trim().length > 0 && !isSyncing.value)
+const canSubmitMatch = computed(() => matchDate.value !== '' && !isSyncing.value)
 
-const actionText = computed(() => {
-  if (syncResult.value === null) return ''
-  return syncResult.value.action === 'created' ? '新建档案' : '更新档案'
+const syncingHint = computed(() => {
+  switch (syncingKind.value) {
+    case 'league':
+      return '正在从竞彩网拉取联赛信息…'
+    case 'team':
+      return '正在拉取联赛档案与积分榜球队清单…'
+    case 'player':
+      return '正在扫描比赛数据收集球员名单,可能需要数十秒…'
+    case 'match':
+      return '正在拉取竞彩网在售赛程…'
+    default:
+      return ''
+  }
 })
+
+/** 本地时区的今天(YYYY-MM-DD),避免 UTC 偏移导致日期错位 */
+function todayIso(): string {
+  const now = new Date()
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
+}
 
 onMounted(() => {
   void baseStore.fetchAll()
 })
 
-/** 触发联赛同步,成功后刷新联赛列表 */
-async function handleSync(): Promise<void> {
-  const name = leagueName.value.trim()
-  if (!name || isSyncing.value) return
+/** 统一的同步执行入口:互斥执行,完成后刷新档案列表 */
+async function runSync(kind: SyncKind, task: () => Promise<void>): Promise<void> {
+  if (isSyncing.value) return
+  if (kind !== 'match' && !leagueName.value.trim()) return
   isSyncing.value = true
+  syncingKind.value = kind
   syncError.value = null
-  syncResult.value = null
   try {
-    syncResult.value = await syncLeague(name)
+    await task()
     await baseStore.fetchAll()
   } catch (err) {
-    syncError.value = err instanceof Error ? err.message : '联赛同步失败'
+    syncError.value = err instanceof Error ? err.message : '同步失败'
   } finally {
     isSyncing.value = false
+    syncingKind.value = null
   }
+}
+
+/** 清空除 keep 外的同步结果卡片 */
+function clearResults(keep: SyncKind): void {
+  if (keep !== 'league') leagueResult.value = null
+  if (keep !== 'team') teamResult.value = null
+  if (keep !== 'player') playerResult.value = null
+  if (keep !== 'match') matchResult.value = null
+}
+
+function handleSyncLeague(): Promise<void> {
+  return runSync('league', async () => {
+    leagueResult.value = await syncLeague(leagueName.value.trim())
+    clearResults('league')
+  })
+}
+
+function handleSyncTeams(): Promise<void> {
+  return runSync('team', async () => {
+    teamResult.value = await syncTeams(leagueName.value.trim())
+    clearResults('team')
+  })
+}
+
+function handleSyncPlayers(): Promise<void> {
+  return runSync('player', async () => {
+    playerResult.value = await syncPlayers(leagueName.value.trim())
+    clearResults('player')
+  })
+}
+
+function handleSyncMatch(): Promise<void> {
+  return runSync('match', async () => {
+    matchResult.value = await syncMatches(matchDate.value)
+    clearResults('match')
+  })
 }
 </script>
 
 <template>
   <section class="collector">
     <header class="collector__header">
-      <h2 class="collector__title">数据采集 · 联赛同步</h2>
+      <h2 class="collector__title">数据采集 · 竞彩网档案同步</h2>
       <p class="collector__subtitle">
-        数据来源:中国竞彩网联赛资料(sporttery.cn/zqlszl),按名称同步联赛档案,
-        重复同步时更新已有记录。
+        数据来源:中国竞彩网。联赛/球队/球员档案来自联赛资料(sporttery.cn/zqlszl),
+        在售赛程来自赛程赛果页(sporttery.cn/jc/zqszsc)。重复同步时更新已有记录。
       </p>
     </header>
 
@@ -71,16 +144,34 @@ async function handleSync(): Promise<void> {
           maxlength="128"
           placeholder="如:西甲"
           :disabled="isSyncing"
-          @keyup.enter="handleSync"
+          @keyup.enter="handleSyncLeague"
         />
-        <button
-          class="collector__btn"
-          type="button"
-          :disabled="!canSubmit"
-          @click="handleSync"
-        >
-          {{ isSyncing ? '同步中…' : '同步' }}
-        </button>
+        <div class="collector__actions">
+          <button
+            class="collector__btn"
+            type="button"
+            :disabled="!canSubmit"
+            @click="handleSyncLeague"
+          >
+            同步联赛
+          </button>
+          <button
+            class="collector__btn"
+            type="button"
+            :disabled="!canSubmit"
+            @click="handleSyncTeams"
+          >
+            同步球队
+          </button>
+          <button
+            class="collector__btn"
+            type="button"
+            :disabled="!canSubmit"
+            @click="handleSyncPlayers"
+          >
+            同步球员
+          </button>
+        </div>
       </div>
 
       <div class="collector__quick">
@@ -98,37 +189,166 @@ async function handleSync(): Promise<void> {
         </button>
       </div>
 
-      <p v-if="isSyncing" class="collector__hint">正在从竞彩网拉取联赛信息…</p>
+      <div class="collector__divider" role="separator"></div>
+
+      <div class="collector__form">
+        <label class="collector__label" for="match-date-input">售卖日期</label>
+        <input
+          id="match-date-input"
+          v-model="matchDate"
+          class="collector__input collector__input--date"
+          type="date"
+          :disabled="isSyncing"
+        />
+        <div class="collector__actions">
+          <button
+            class="collector__btn"
+            type="button"
+            :disabled="!canSubmitMatch"
+            @click="handleSyncMatch"
+          >
+            同步赛事
+          </button>
+        </div>
+      </div>
+      <p class="collector__quick-label collector__match-hint">
+        售卖日与竞彩赛程页的日期一致;次日凌晨开赛的比赛归属前一个售卖日。
+        联赛与球队须已先入库,未入库的联赛会在结果中提示。
+      </p>
+
+      <p v-if="syncingHint" class="collector__hint">{{ syncingHint }}</p>
       <p v-if="syncError" class="collector__error" role="alert">{{ syncError }}</p>
 
-      <div v-if="syncResult" class="collector__result">
+      <!-- 联赛同步结果 -->
+      <div v-if="leagueResult" class="collector__result">
         <div class="collector__result-head">
-          <span class="collector__result-badge">{{ actionText }}</span>
-          <strong>{{ syncResult.league.league_name }}</strong>
-          <span class="collector__result-source">来源:{{ syncResult.source }}</span>
+          <span class="collector__result-badge">
+            {{ leagueResult.action === 'created' ? '新建档案' : '更新档案' }}
+          </span>
+          <strong>{{ leagueResult.league.league_name }}</strong>
+          <span class="collector__result-source">来源:{{ leagueResult.source }}</span>
         </div>
         <dl class="collector__result-fields">
           <div>
             <dt>国家/地区</dt>
-            <dd>{{ syncResult.league.country }}</dd>
+            <dd>{{ leagueResult.league.country }}</dd>
           </div>
           <div>
             <dt>级别</dt>
-            <dd>{{ syncResult.league.tier === 1 ? '顶级' : '次级' }}</dd>
+            <dd>{{ leagueResult.league.tier === 1 ? '顶级' : '次级' }}</dd>
           </div>
           <div>
             <dt>当前赛季</dt>
-            <dd>{{ syncResult.league.season }}</dd>
+            <dd>{{ leagueResult.league.season }}</dd>
           </div>
           <div>
             <dt>竞彩联赛 ID</dt>
-            <dd>{{ syncResult.uniform_league_id }}</dd>
+            <dd>{{ leagueResult.uniform_league_id }}</dd>
           </div>
         </dl>
       </div>
+
+      <!-- 球队同步结果 -->
+      <div v-if="teamResult" class="collector__result">
+        <div class="collector__result-head">
+          <span class="collector__result-badge">球队清单已同步</span>
+          <strong>{{ teamResult.league.league_name }}</strong>
+          <span class="collector__result-source">来源:{{ teamResult.source }}</span>
+        </div>
+        <dl class="collector__result-fields">
+          <div>
+            <dt>球队总数</dt>
+            <dd>{{ teamResult.team_count }}</dd>
+          </div>
+          <div>
+            <dt>新建</dt>
+            <dd>{{ teamResult.created_count }}</dd>
+          </div>
+          <div>
+            <dt>更新</dt>
+            <dd>{{ teamResult.updated_count }}</dd>
+          </div>
+        </dl>
+      </div>
+
+      <!-- 球员同步结果 -->
+      <div v-if="playerResult" class="collector__result">
+        <div class="collector__result-head">
+          <span class="collector__result-badge">球员名单已同步</span>
+          <strong>{{ playerResult.league.league_name }}</strong>
+          <span class="collector__result-source">来源:{{ playerResult.source }}</span>
+        </div>
+        <dl class="collector__result-fields">
+          <div>
+            <dt>覆盖球队</dt>
+            <dd>{{ playerResult.team_count }}</dd>
+          </div>
+          <div>
+            <dt>球员总数</dt>
+            <dd>{{ playerResult.player_count }}</dd>
+          </div>
+          <div>
+            <dt>新建 / 更新</dt>
+            <dd>{{ playerResult.created_count }} / {{ playerResult.updated_count }}</dd>
+          </div>
+          <div>
+            <dt>扫描场次</dt>
+            <dd>{{ playerResult.matches_scanned }}</dd>
+          </div>
+        </dl>
+        <p v-if="playerResult.skipped_teams.length > 0" class="collector__result-note">
+          ⚠ 未取得球员数据的球队(如刚升级、当前赛季尚未完赛):{{
+            playerResult.skipped_teams.join('、')
+          }}
+        </p>
+      </div>
+
+      <!-- 赛事同步结果 -->
+      <div v-if="matchResult" class="collector__result">
+        <div class="collector__result-head">
+          <span class="collector__result-badge">赛事已同步</span>
+          <strong>{{ matchResult.date }}</strong>
+          <span class="collector__result-source">来源:{{ matchResult.source }}</span>
+        </div>
+        <dl class="collector__result-fields">
+          <div>
+            <dt>在售场次</dt>
+            <dd>{{ matchResult.day_match_count }}</dd>
+          </div>
+          <div>
+            <dt>新建赛事</dt>
+            <dd>{{ matchResult.created_count }}</dd>
+          </div>
+          <div>
+            <dt>更新赛事</dt>
+            <dd>{{ matchResult.updated_count }}</dd>
+          </div>
+        </dl>
+        <p
+          v-if="matchResult.skipped_leagues.length > 0"
+          class="collector__result-note"
+        >
+          ⚠ 以下联赛未入库已跳过,请先在上方同步对应联赛:{{
+            matchResult.skipped_leagues.join('、')
+          }}
+        </p>
+        <p
+          v-if="matchResult.skipped_matches.length > 0"
+          class="collector__result-note"
+        >
+          ⚠ 以下场次因球队未入库已跳过:{{
+            matchResult.skipped_matches.join(';')
+          }}
+        </p>
+      </div>
     </div>
 
-    <h3 class="collector__section-title">已同步联赛</h3>
+    <h3 class="collector__section-title">
+      已同步档案
+      <span class="collector__section-meta">
+        联赛 {{ leagues.length }} · 球队 {{ teams.length }} · 球员 {{ players.length }}
+      </span>
+    </h3>
     <p v-if="isLoading" class="collector__hint">加载中…</p>
     <table v-else class="collector__table">
       <thead>
@@ -188,6 +408,11 @@ async function handleSync(): Promise<void> {
     flex-wrap: wrap;
   }
 
+  &__actions {
+    display: flex;
+    gap: vars.$spacing-sm;
+  }
+
   &__label {
     font-size: vars.$font-size-md;
     color: vars.$color-text-secondary;
@@ -209,7 +434,7 @@ async function handleSync(): Promise<void> {
   }
 
   &__btn {
-    padding: vars.$spacing-sm vars.$spacing-lg;
+    padding: vars.$spacing-sm vars.$spacing-md;
     border: none;
     border-radius: vars.$border-radius;
     background: vars.$color-primary;
@@ -234,6 +459,21 @@ async function handleSync(): Promise<void> {
     gap: vars.$spacing-xs;
     margin-top: vars.$spacing-md;
     flex-wrap: wrap;
+  }
+
+  &__divider {
+    height: 1px;
+    margin: vars.$spacing-lg 0 vars.$spacing-md;
+    background: vars.$color-border;
+  }
+
+  &__match-hint {
+    margin: vars.$spacing-xs 0 0;
+  }
+
+  &__input--date {
+    flex: none;
+    width: 180px;
   }
 
   &__quick-label {
@@ -320,8 +560,21 @@ async function handleSync(): Promise<void> {
     }
   }
 
+  &__result-note {
+    margin: vars.$spacing-sm 0 0;
+    font-size: vars.$font-size-sm;
+    color: vars.$color-warning;
+  }
+
   &__section-title {
     margin: vars.$spacing-lg 0 vars.$spacing-sm;
+  }
+
+  &__section-meta {
+    margin-left: vars.$spacing-sm;
+    font-size: vars.$font-size-sm;
+    font-weight: 400;
+    color: vars.$color-text-secondary;
   }
 
   &__table {

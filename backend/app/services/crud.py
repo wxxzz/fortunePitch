@@ -59,11 +59,28 @@ async def list_entities(
     model: type[ModelT],
     offset: int = 0,
     limit: int = DEFAULT_PAGE_SIZE,
+    filters: dict[str, Any] | None = None,
 ) -> Sequence[ModelT]:
-    """分页查询实体列表(限制单页上限,防止无界查询)。"""
+    """分页查询实体列表(限制单页上限,防止无界查询)。
+
+    Args:
+        session: 异步数据库会话。
+        model: ORM 模型类。
+        offset: 偏移量。
+        limit: 单页条数(自动收敛到 [1, MAX_PAGE_SIZE])。
+        filters: 可选的等值过滤条件(字段名 -> 值),如 ``{"league_id": 1}``。
+
+    Returns:
+        实体列表。
+    """
     safe_limit = min(max(limit, 1), MAX_PAGE_SIZE)
     safe_offset = max(offset, 0)
-    result = await session.execute(select(model).offset(safe_offset).limit(safe_limit))
+    statement = select(model)
+    if filters:
+        statement = statement.filter_by(**filters)
+    result = await session.execute(
+        statement.offset(safe_offset).limit(safe_limit)
+    )
     return result.scalars().all()
 
 

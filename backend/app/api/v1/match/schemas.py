@@ -23,6 +23,31 @@ class MatchGameCreate(BaseModel):
     away_score: int | None = Field(default=None, ge=0)
 
 
+class MatchOddsOptionRead(BaseModel):
+    """玩法选项响应模型。"""
+
+    code: str = Field(description="选项编码,如 h / s01s02 / hh")
+    label: str = Field(description="选项展示名,如 主胜 / 1:2 / 胜胜")
+    odds: float = Field(description="十进制赔率")
+
+
+class MatchOddsPoolRead(BaseModel):
+    """单种玩法赔率响应模型。"""
+
+    poolCode: str = Field(description="玩法编码:HAD/HHAD/CRS/TTG/HAFU")
+    playName: str = Field(description="玩法展示名:胜平负/让球胜平负/比分/总进球/半全场")
+    goalLine: str | None = Field(default=None, description="让球盘口(仅让球玩法)")
+    options: list[MatchOddsOptionRead] = Field(description="选项与赔率列表")
+
+
+class MatchOddsRead(BaseModel):
+    """比赛玩法赔率响应模型。"""
+
+    match_id: str
+    pools: list[MatchOddsPoolRead] = Field(description="已开售玩法列表")
+    update_time: datetime.datetime
+
+
 class MatchGameRead(BaseModel):
     """比赛响应模型。"""
 
@@ -37,6 +62,8 @@ class MatchGameRead(BaseModel):
     match_status: MatchStatus
     home_score: int | None
     away_score: int | None
+    # 竞彩在售玩法赔率(未同步或未开售时为空)
+    odds: MatchOddsRead | None = None
 
 
 class MatchScoreUpdate(BaseModel):

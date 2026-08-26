@@ -8,6 +8,8 @@ from app.models import DecisionStatus
 
 # 允许的策略类型与玩法取值
 STRATEGY_TYPES = ("WIN_DRAW_LOSS", "HANDICAP", "SCORE")
+# 用户自选决策允许的玩法编码(与竞彩玩法对应,宽于 STRATEGY_TYPES)
+USER_PICK_POOL_CODES = ("HAD", "HHAD", "CRS", "TTG", "HAFU")
 
 
 # ---------- 赔率与盘口 ----------
@@ -92,6 +94,32 @@ class UserDecisionRead(BaseModel):
     stake_amount: float
     result_status: DecisionStatus
     profit_loss: float | None
+
+
+class UserPickSelection(BaseModel):
+    """批量模拟决策中的单条自选。"""
+
+    match_id: str = Field(max_length=64, description="比赛编号")
+    pool_code: str = Field(
+        description="玩法编码:HAD/HHAD/CRS/TTG/HAFU", examples=["HAD"]
+    )
+    option_code: str = Field(max_length=16, description="选项编码,如 h / s01s02", examples=["h"])
+    option_label: str = Field(max_length=32, description="选项展示名,如 主胜", examples=["主胜"])
+
+
+class UserDecisionsBatchCreate(BaseModel):
+    """批量创建用户模拟决策请求体(赛事中心自选玩法确认)。"""
+
+    user_id: int
+    stake_amount: float = Field(gt=0, le=10_000, description="每条自选的模拟注额")
+    selections: list[UserPickSelection] = Field(min_length=1, max_length=20)
+
+
+class UserDecisionsBatchResult(BaseModel):
+    """批量创建用户模拟决策结果。"""
+
+    decision_count: int = Field(description="创建的决策条数")
+    decisions: list[UserDecisionRead]
 
 
 # ---------- 凯利指数 ----------

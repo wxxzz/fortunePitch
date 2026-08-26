@@ -1,8 +1,9 @@
-"""比赛与赛果模块路由:fp_match_ 两张表的增删查接口。"""
+"""比赛与赛果模块路由:fp_match_ 表的增删查接口。"""
 
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.api.v1.match.schemas import (
     MatchEventCreate,
@@ -12,9 +13,9 @@ from app.api.v1.match.schemas import (
     MatchScoreUpdate,
 )
 from app.core.database import get_db_session
-from app.core.exceptions import DataValidationError
+from app.core.exceptions import DataValidationError, ResourceNotFoundError
 from app.core.security import verify_api_key
-from app.models import MatchEvent, MatchGame, MatchStatus
+from app.models import MatchEvent, MatchGame, MatchOdds, MatchStatus
 from app.services import crud
 
 router = APIRouter(prefix="/match", tags=["match"], dependencies=[Depends(verify_api_key)])
@@ -33,7 +34,10 @@ async def create_game(
     """
     if payload.home_team_id == payload.away_team_id:
         raise DataValidationError("主队与客队不能是同一支球队")
-    return await crud.create_entity(session, MatchGame, payload.model_dump())
+    game = await crud.create_entity(session, MatchGame, payload.model_dump())
+    # 新建比赛无赔率记录,显式加载关系避免响应序列化时懒加载
+    await session.refresh(game, attribute_names=["odds"])
+    return game
 
 
 @router.get("/games", response_model=list[MatchGameRead])
@@ -42,14 +46,28 @@ async def list_games(
     limit: int = Query(default=20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[MatchGame]:
-    """分页查询比赛列表。"""
-    return list(await crud.list_entities(session, MatchGame, offset, limit))
+    """分页查询比赛列表(含在售玩法赔率)。"""
+    stmt = (
+        select(MatchGame)
+        .options(selectinload(MatchGame.odds))
+        .order_by(MatchGame.match_time)
+        .offset(offset)
+        .limit(limit)
+    )
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
 
 
 @router.get("/games/{match_id}", response_model=MatchGameRead)
 async def get_game(match_id: str, session: AsyncSession = Depends(get_db_session)) -> MatchGame:
-    """按比赛编号查询。"""
-    return await crud.get_entity(session, MatchGame, match_id)
+    """按比赛编号查询(含在售玩法赔率)。"""
+    stmt = select(MatchGame).options(selectinload(MatchGame.odds)).where(
+        MatchGame.match_id == match_id
+    )
+    game = (await session.execute(stmt)).scalar_one_or_none()
+    if game is None:
+        raise ResourceNotFoundError(MatchGame.__tablename__, match_id)
+    return game
 
 
 @router.patch("/games/{match_id}/score", response_model=MatchGameRead)
@@ -64,7 +82,8 @@ async def update_score(
     game.away_score = payload.away_score
     game.match_status = MatchStatus.FINISHED
     await session.flush()
-    await session.refresh(game)
+    # 显式加载赔率关系,避免响应序列化时异步懒加载
+    await session.refresh(game, attribute_names=["odds"])
     return game
 
 

@@ -6,6 +6,28 @@ import request from '../request'
 /** 比赛状态 */
 export type MatchStatus = 'PENDING' | 'LIVE' | 'FINISHED'
 
+/** 玩法选项(赔率) */
+export interface MatchOddsOption {
+  code: string
+  label: string
+  odds: number
+}
+
+/** 单种玩法赔率(HAD/HHAD/CRS/TTG/HAFU) */
+export interface MatchOddsPool {
+  poolCode: string
+  playName: string
+  goalLine?: string
+  options: MatchOddsOption[]
+}
+
+/** 比赛在售玩法赔率 */
+export interface MatchOdds {
+  match_id: string
+  pools: MatchOddsPool[]
+  update_time: string
+}
+
 /** 比赛基础信息 */
 export interface MatchGame {
   match_id: string
@@ -17,6 +39,8 @@ export interface MatchGame {
   match_status: MatchStatus
   home_score: number | null
   away_score: number | null
+  /** 竞彩在售玩法赔率(未同步或未开售时为空) */
+  odds: MatchOdds | null
 }
 
 /** 创建比赛参数 */

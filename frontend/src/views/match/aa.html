@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>赛事中心 - 完整修复版</title>
+    <style>
+        :root {
+            --primary: #1677ff; /* 待赛主色 */
+            --secondary: #722ed1; /* 指数紫 */
+            --text-main: #1f1f1f;
+            --text-sec: #8c8c8c;
+            --border: #f0f0f0;
+            --bg: #f5f7fa;
+            --card-bg: #ffffff;
+            --score-color: #d9363e; /* 比分红 */
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: var(--bg);
+            margin: 0;
+            padding: 20px;
+            color: var(--text-main);
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background: var(--card-bg);
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+            overflow: hidden;
+        }
+
+        /* --- 顶部 Tab 导航 --- */
+        .tabs {
+            display: flex;
+            border-bottom: 1px solid var(--border);
+            padding: 0 20px;
+        }
+
+        .tab-item {
+            padding: 16px 24px;
+            font-size: 16px;
+            font-weight: 500;
+            cursor: pointer;
+            color: var(--text-sec);
+            position: relative;
+            transition: all 0.3s;
+        }
+
+        .tab-item:hover {
+            color: var(--primary);
+        }
+
+        .tab-item.active {
+            color: var(--primary);
+            font-weight: bold;
+        }
+
+        /* 底部高亮条 */
+        .tab-item.active::after {
+            content: '';
+            position: absolute;
+            bottom: -1px;
+            left: 0;
+            width: 100%;
+            height: 3px;
+            background-color: var(--primary);
+            border-radius: 3px 3px 0 0;
+        }
+
+        /* --- 列表容器 --- */
+        .match-list {
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        /* 核心修复：默认隐藏，通过 JS 控制显示 */
+        .list-container {
+            display: none; 
+        }
+        
+        .list-container.active {
+            display: flex; /* 激活时显示 */
+        }
+
+        /* --- 卡片样式 (通用) --- */
+        .card {
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: #fff;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+            border-color: #d9d9d9;
+        }
+
+        /* 左侧：时间与联赛 */
+        .col-left {
+            width: 100px;
+            text-align: left;
+            flex-shrink: 0;
+            border-right: 1px dashed var(--border);
+            padding-right: 20px;
+            margin-right: 20px;
+        }
+
+        .league-name {
+            font-size: 12px;
+            color: var(--text-sec);
+            margin-bottom: 4px;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .match-time {
+            font-size: 18px;
+            font-weight: bold;
+            color: var(--text-main);
+            margin-bottom: 4px;
+        }
+
+        .match-date {
+            font-size: 12px;
+            color: var(--text-sec);
+        }
+
+        /* 中间：对阵信息 */
+        .col-center {
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center; /* 居中对齐 */
+        }
+
+        /* 待赛布局：主队 vs 客队 */
+        .match-teams {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 20px;
+            width: 100%;
+        }
+
+        .team {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 16px;
+            font-weight: 500;
+            width: 120px; 
+        }
+
+        .team.home { justify-content: flex-end; text-align: right; }
+        .team.away { justify-content: flex-start; text-align: left; }
+
+        .vs-badge {
+            font-size: 12px;
+            color: var(--text-sec);
+            background: #f0f0f0;
+            padding: 2px 6px;
+            border-radius: 4px;
+        }
+
+        /* 已完赛布局：比分突出 */
+        .score-board {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 15px;
+            margin-bottom: 10px;
+        }
+
+        .score-num {
+            font-size: 24px;
+            font-weight: bold;
+            color: var(--score-color);
+            font-family: 'DIN Alternate', sans-serif;
+        }
+
+        .score-divider {
+            color: var(--text-sec);
+            font-size: 14px;
+        }
+
+        /* 右侧：操作按钮或数据网格 */
+        .col-right {
+            width: 240px;
+            flex-shrink: 0;
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+        }
+
+        /* 待赛按钮样式 */
+        .btn {
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 13px;
+            cursor: pointer;
+            border: 1px solid transparent;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .btn-data {
+            background: #e6f4ff;
+            color: var(--primary);
+            border-color: #91caff;
+        }
+        .btn-data:hover { background: #bae0ff; }
+
+        .btn-index {
+            background: #f9f0ff;
+            color: var(--secondary);
+            border-color: #d3adf7;
+        }
+        .btn-index:hover { background: #efdbff; }
+
+        /* 已完赛数据块样式 */
+        .data-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 8px;
+            width: 100%;
+        }
+
+        .data-item {
+            background: #fafafa;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 6px;
+            text-align: center;
+        }
+
+        .data-label {
+            font-size: 11px;
+            color: var(--text-sec);
+            margin-bottom: 2px;
+        }
+
+        .data-val {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-main);
+        }
+        
+        .data-odd {
+            font-size: 11px;
+            color: var(--score-color);
+        }
+
+        /* 响应式调整 */
+        @media (max-width: 768px) {
+            .card { flex-direction: column; align-items: stretch; gap: 15px; }
+            .col-left { border-right: none; border-bottom: 1px dashed var(--border); padding-bottom: 10px; margin-right: 0; width: auto; display: flex; justify-content: space-between; align-items: center;}
+            .col-center { padding: 10px 0; }
+            .col-right { width: 100%; justify-content: space-between; }
+            .team { width: auto; flex: 1; }
+            .team.home { justify-content: flex-start; text-align: left; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <!-- 顶部 Tab -->
+    <div class="tabs">
+        <div class="tab-item active" onclick="switchTab('upcoming', this)">待赛事 (12)</div>
+        <div class="tab-item" onclick="switchTab('finished', this)">已完赛 (8)</div>
+    </div>
+
+    <!-- 待赛事列表容器 -->
+    <div id="list-upcoming" class="list-container active match-list">
+        
+        <!-- 待赛卡片 1 -->
+        <div class="card">
+            <div class="col-left">
+                <div class="league-name">🏴󠁧󠁢󠁥󠁮󠁧󠁿 英超 <span style="background:#f0f0f0;padding:2px 4px;border-radius:4px;font-size:10px;">第10轮</span></div>
+                <div class="match-time">22:00</div>
+                <div class="match-date">今天</div>
+            </div>
+            <div class="col-center">
+                <div class="match-teams">
+                    <div class="team home">
+                        <span>曼联</span>
+                        <img src="https://placehold.co/24/eee/999?text=MU" style="border-radius:50%">
+                    </div>
+                    <div class="vs-badge">VS</div>
+                    <div class="team away">
+                        <img src="https://placehold.co/24/eee/999?text=MC" style="border-radius:50%">
+                        <span>曼城</span>
+                    </div>
+                </div>
+            </div>
+            <div class="col-right">
+                <button class="btn btn-data">📊 数据分析</button>
+                <button class="btn btn-index">📈 指数分析</button>
+            </div>
+        </div>
+
+        <!-- 待赛卡片 2 -->
+        <div class="card">
+            <div class="col-left">
+                <div class="league-name">🇪🇸 西甲 <span style="background:#f0f0f0;padding:2px 4px;border-radius:4px;font-size:10px;">第11轮</span></div>
+                <div class="match-time">03:00</div>
+                <div class="match-date">明天</div>
+            </div>
+            <div class="col-center">
+                <div class="match-teams">
+                    <div class="team home">
+                        <span>皇家马德里</span>
+                        <img src="https://placehold.co/24/eee/999?text=RM" style="border-radius:50%">
+                    </div>
+                    <div class="vs-badge">VS</div>
+                    <div class="team away">
+                        <img src="https://placehold.co/24/eee/999?text=BC" style="border-radius:50%">
+                        <span>巴塞罗那</span>
+                    </div>
+                </div>
+            </div>
+            <div class="col-right">
+                <button class="btn btn-data">📊 数据分析</button>
+                <button class="btn btn-index">📈 指数分析</button>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- 已完赛列表容器 -->
+    <div id="list-finished" class="list-container match-list">
+        
+        <!-- 已完赛卡片 1 -->
+        <div class="card">
+            <div class="col-left">
+                <div class="league-name">🇮🇹 意甲</div>
+                <div class="match-time" style="color:var(--text-sec); font-weight:normal;">已结束</div>
+                <div class="match-date">10月28日</div>
+            </div>
+            <div class="col-center">
+                <!-- 完赛展示比分 -->
+                <div class="score-board">
+                    <div class="team home" style="width:auto;">
+                        <span>尤文图斯</span>
+                    </div>
+                    <div class="score-num">2 : 1</div>
+                    <div class="team away" style="width:auto;">
+                        <span>国际米兰</span>
+                    </div>
+                </div>
+                <!-- 完赛展示详细数据 -->
+                <div class="data-grid">
+                    <div class="data-item">
+                        <div class="data-label">胜平负</div>
+                        <div class="data-val">主胜 <span class="data-odd">2.10</span></div>
+                    </div>
+                    <div class="data-item">
+                        <div class="data-label">半全场</div>
+                        <div class="data-val">胜胜 <span class="data-odd">3.45</span></div>
+                    </div>
+                    <div class="data-item">
+                        <div class="data-label">总进球</div>
+                        <div class="data-val">3球 <span class="data-odd">4.20</span></div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-right" style="justify-content: center;">
+                <!-- 完赛通常看复盘，这里保留按钮或换成“查看战报” -->
+                <button class="btn btn-data" style="background:#f5f5f5; color:#666; border:#d9d9d9;">📄 比赛战报</button>
+            </div>
+        </div>
+
+    </div>
+</div>
+
+<script>
+    /**
+     * 切换 Tab 的核心逻辑
+     * @param {string} tabName - 'upcoming' 或 'finished'
+     * @param {HTMLElement} element - 被点击的 DOM 元素
+     */
+    function switchTab(tabName, element) {
+        // 1. 处理顶部 Tab 的样式（高亮当前点击的）
+        const tabs = document.querySelectorAll('.tab-item');
+        tabs.forEach(tab => tab.classList.remove('active'));
+        element.classList.add('active');
+
+        // 2. 处理下方列表内容的显示与隐藏（关键修复点）
+        const listUpcoming = document.getElementById('list-upcoming');
+        const listFinished = document.getElementById('list-finished');
+
+        if (tabName === 'upcoming') {
+            listUpcoming.classList.add('active'); // 显示待赛
+            listFinished.classList.remove('active'); // 隐藏完赛
+        } else if (tabName === 'finished') {
+            listFinished.classList.add('active'); // 显示完赛
+            listUpcoming.classList.remove('active'); // 隐藏待赛
+        }
+    }
+</script>
+
+</body>
+</html>
