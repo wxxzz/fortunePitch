@@ -1,5 +1,5 @@
 /**
- * 数据采集模块 API:赛事(在售赛程)同步。
+ * 数据采集模块 API:赛事(在售赛程)与赛果(开奖)同步。
  */
 import request from '../request'
 
@@ -21,6 +21,29 @@ export interface MatchSyncResult {
 export async function syncMatches(date: string): Promise<MatchSyncResult> {
   const { data } = await request.post<MatchSyncResult>(
     '/api/v1/collector/matches/sync',
+    { date },
+  )
+  return data
+}
+
+/** 赛果同步结果 */
+export interface ResultSyncResult {
+  date: string
+  /** 该比赛日竞彩网已开赛场次总数 */
+  day_result_count: number
+  created_count: number
+  updated_count: number
+  /** 回写比分与完赛状态的场次数 */
+  game_updated_count: number
+  /** 场次未入库等原因被跳过的场次说明 */
+  skipped_matches: string[]
+  source: string
+}
+
+/** 按比赛日同步竞彩赛果开奖数据(来源:中国竞彩网赛果开奖页) */
+export async function syncResults(date: string): Promise<ResultSyncResult> {
+  const { data } = await request.post<ResultSyncResult>(
+    '/api/v1/collector/results/sync',
     { date },
   )
   return data

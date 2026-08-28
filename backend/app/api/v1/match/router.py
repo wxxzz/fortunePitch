@@ -1,5 +1,7 @@
 """比赛与赛果模块路由:fp_match_ 表的增删查接口。"""
 
+import datetime
+
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,8 +12,10 @@ from app.api.v1.match.schemas import (
     MatchEventRead,
     MatchGameCreate,
     MatchGameRead,
+    MatchResultRead,
     MatchScoreUpdate,
 )
+from app.collector.sync import result_sync
 from app.core.database import get_db_session
 from app.core.exceptions import DataValidationError, ResourceNotFoundError
 from app.core.security import verify_api_key
@@ -91,6 +95,51 @@ async def update_score(
 async def delete_game(match_id: str, session: AsyncSession = Depends(get_db_session)) -> None:
     """删除比赛。"""
     await crud.delete_entity(session, MatchGame, match_id)
+
+
+# ---------- 赛果开奖 /results ----------
+
+@router.get("/results", response_model=list[MatchResultRead], summary="按比赛日查询赛果开奖")
+async def list_results(
+    date: datetime.date = Query(description="比赛日(YYYY-MM-DD)"),
+    session: AsyncSession = Depends(get_db_session),
+) -> list[MatchResultRead]:
+    """查询指定比赛日的赛果开奖列表(含各玩法开奖结果与 SP)。
+
+    数据由采集模块的赛果同步写入,未同步的日期返回空列表。
+    """
+    pairs = await result_sync.list_results_by_date(session, date)
+    return [
+        MatchResultRead(
+            match_id=result.match_id,
+            match_num_str=result.match_num_str,
+            league_name=game.league.league_name,
+            home_team_name=game.home_team.team_name,
+            away_team_name=game.away_team.team_name,
+            match_time=game.match_time,
+            goal_line=result.goal_line,
+            half_score=(
+                f"{result.half_home_score}:{result.half_away_score}"
+                if result.half_home_score is not None
+                else None
+            ),
+            full_score=(
+                f"{result.full_home_score}:{result.full_away_score}"
+                if result.full_home_score is not None
+                else None
+            ),
+            had=result.had,
+            hhad=result.hhad,
+            crs=result.crs,
+            ttg=result.ttg,
+            hafu=result.hafu,
+            sp_h=result.sp_h,
+            sp_d=result.sp_d,
+            sp_a=result.sp_a,
+            pool_status=result.pool_status,
+        )
+        for result, game in pairs
+    ]
 
 
 # ---------- 比赛事件 /events ----------

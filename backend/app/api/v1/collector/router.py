@@ -10,10 +10,12 @@ from app.api.v1.collector.schemas import (
     MatchSyncRequest,
     MatchSyncResultRead,
     PlayerSyncResultRead,
+    ResultSyncRequest,
+    ResultSyncResultRead,
     TeamPlayerCountRead,
     TeamSyncResultRead,
 )
-from app.collector.sync import league_sync, match_sync, player_sync, team_sync
+from app.collector.sync import league_sync, match_sync, player_sync, result_sync, team_sync
 from app.core.database import get_db_session
 from app.core.security import verify_api_key
 from app.models import League
@@ -120,5 +122,31 @@ async def sync_matches(
         updated_count=result.updated_count,
         odds_count=result.odds_count,
         skipped_leagues=result.skipped_league_names,
+        skipped_matches=result.skipped_matches,
+    )
+
+
+@router.post(
+    "/results/sync",
+    response_model=ResultSyncResultRead,
+    status_code=status.HTTP_200_OK,
+    summary="按比赛日同步竞彩赛果开奖数据",
+)
+async def sync_results(
+    payload: ResultSyncRequest, session: AsyncSession = Depends(get_db_session)
+) -> ResultSyncResultRead:
+    """从中国竞彩网赛果开奖页拉取指定比赛日的开奖结果并入库。
+
+    数据来源:https://www.sporttery.cn/jc/zqsgkj/
+    场次须已在赛事档案中,未入库的场次在结果中列出;
+    比分有效的场次会同步回写比赛比分与完赛状态。
+    """
+    result = await result_sync.sync_results_by_date(session, payload.date.isoformat())
+    return ResultSyncResultRead(
+        date=result.date,
+        day_result_count=result.day_result_count,
+        created_count=result.created_count,
+        updated_count=result.updated_count,
+        game_updated_count=result.game_updated_count,
         skipped_matches=result.skipped_matches,
     )

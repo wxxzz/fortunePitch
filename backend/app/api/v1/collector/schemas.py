@@ -86,3 +86,26 @@ class MatchSyncResultRead(BaseModel):
         description="球队档案未入库等原因被跳过的场次说明"
     )
     source: str = Field(description="数据来源标识", default="sporttery")
+
+
+class ResultSyncRequest(BaseModel):
+    """同步请求体:按比赛日拉取竞彩赛果开奖数据。"""
+
+    date: datetime.date = Field(
+        description="比赛日(YYYY-MM-DD),与赛果开奖页的日期选择一致",
+        examples=["2026-08-25"],
+    )
+
+
+class ResultSyncResultRead(BaseModel):
+    """赛果同步结果。"""
+
+    date: datetime.date = Field(description="本次同步的比赛日")
+    day_result_count: int = Field(description="该比赛日竞彩网已开赛场次总数")
+    created_count: int = Field(description="新建赛果数")
+    updated_count: int = Field(description="更新赛果数")
+    game_updated_count: int = Field(description="回写比分与完赛状态的场次数")
+    skipped_matches: list[str] = Field(
+        description="场次未入库等原因被跳过的场次说明"
+    )
+    source: str = Field(description="数据来源标识", default="sporttery")

@@ -16,16 +16,22 @@ import {
   type PlayerSyncResult,
   type TeamSyncResult,
 } from '@/api/collector/league'
-import { syncMatches, type MatchSyncResult } from '@/api/collector/match'
+import {
+  syncMatches,
+  syncResults,
+  type MatchSyncResult,
+  type ResultSyncResult,
+} from '@/api/collector/match'
 import { useBaseStore } from '@/stores/base'
 
 const baseStore = useBaseStore()
 const { leagues, teams, players, isLoading } = storeToRefs(baseStore)
 
-type SyncKind = 'league' | 'team' | 'player' | 'match'
+type SyncKind = 'league' | 'team' | 'player' | 'match' | 'result'
 
 const leagueName = ref('西甲')
 const matchDate = ref(todayIso())
+const resultDate = ref(todayIso())
 const isSyncing = ref(false)
 /** 当前正在执行的同步类型(用于按钮态与提示文案) */
 const syncingKind = ref<SyncKind | null>(null)
@@ -35,12 +41,14 @@ const leagueResult = ref<LeagueSyncResult | null>(null)
 const teamResult = ref<TeamSyncResult | null>(null)
 const playerResult = ref<PlayerSyncResult | null>(null)
 const matchResult = ref<MatchSyncResult | null>(null)
+const resultSyncOutcome = ref<ResultSyncResult | null>(null)
 
 /** 快捷入口:竞彩网热门联赛简称 */
 const QUICK_LEAGUES = ['西甲', '英超', '德甲', '意甲', '法甲'] as const
 
 const canSubmit = computed(() => leagueName.value.trim().length > 0 && !isSyncing.value)
 const canSubmitMatch = computed(() => matchDate.value !== '' && !isSyncing.value)
+const canSubmitResult = computed(() => resultDate.value !== '' && !isSyncing.value)
 
 const syncingHint = computed(() => {
   switch (syncingKind.value) {
@@ -52,6 +60,8 @@ const syncingHint = computed(() => {
       return '正在扫描比赛数据收集球员名单,可能需要数十秒…'
     case 'match':
       return '正在拉取竞彩网在售赛程…'
+    case 'result':
+      return '正在拉取竞彩网赛果开奖数据…'
     default:
       return ''
   }
@@ -71,7 +81,7 @@ onMounted(() => {
 /** 统一的同步执行入口:互斥执行,完成后刷新档案列表 */
 async function runSync(kind: SyncKind, task: () => Promise<void>): Promise<void> {
   if (isSyncing.value) return
-  if (kind !== 'match' && !leagueName.value.trim()) return
+  if (kind !== 'match' && kind !== 'result' && !leagueName.value.trim()) return
   isSyncing.value = true
   syncingKind.value = kind
   syncError.value = null
@@ -92,6 +102,7 @@ function clearResults(keep: SyncKind): void {
   if (keep !== 'team') teamResult.value = null
   if (keep !== 'player') playerResult.value = null
   if (keep !== 'match') matchResult.value = null
+  if (keep !== 'result') resultSyncOutcome.value = null
 }
 
 function handleSyncLeague(): Promise<void> {
@@ -121,6 +132,13 @@ function handleSyncMatch(): Promise<void> {
     clearResults('match')
   })
 }
+
+function handleSyncResult(): Promise<void> {
+  return runSync('result', async () => {
+    resultSyncOutcome.value = await syncResults(resultDate.value)
+    clearResults('result')
+  })
+}
 </script>
 
 <template>
@@ -129,7 +147,8 @@ function handleSyncMatch(): Promise<void> {
       <h2 class="collector__title">数据采集 · 竞彩网档案同步</h2>
       <p class="collector__subtitle">
         数据来源:中国竞彩网。联赛/球队/球员档案来自联赛资料(sporttery.cn/zqlszl),
-        在售赛程来自赛程赛果页(sporttery.cn/jc/zqszsc)。重复同步时更新已有记录。
+        在售赛程来自赛程赛果页(sporttery.cn/jc/zqszsc),赛果开奖来自
+        赛果开奖页(sporttery.cn/jc/zqsgkj)。重复同步时更新已有记录。
       </p>
     </header>
 
@@ -214,6 +233,34 @@ function handleSyncMatch(): Promise<void> {
       <p class="collector__quick-label collector__match-hint">
         售卖日与竞彩赛程页的日期一致;次日凌晨开赛的比赛归属前一个售卖日。
         联赛与球队须已先入库,未入库的联赛会在结果中提示。
+      </p>
+
+      <div class="collector__divider" role="separator"></div>
+
+      <div class="collector__form">
+        <label class="collector__label" for="result-date-input">比赛日期(赛果)</label>
+        <input
+          id="result-date-input"
+          v-model="resultDate"
+          class="collector__input collector__input--date"
+          type="date"
+          :disabled="isSyncing"
+        />
+        <div class="collector__actions">
+          <button
+            class="collector__btn"
+            type="button"
+            :disabled="!canSubmitResult"
+            @click="handleSyncResult"
+          >
+            同步赛果
+          </button>
+        </div>
+      </div>
+      <p class="collector__quick-label collector__match-hint">
+        比赛日与竞彩赛果开奖页(sporttery.cn/jc/zqsgkj)的日期一致。
+        场次须已在赛事档案中,比分有效的场次会同步回写比赛比分与完赛状态;
+        同步后可在"赛果开奖"页查看各玩法开奖结果。
       </p>
 
       <p v-if="syncingHint" class="collector__hint">{{ syncingHint }}</p>
@@ -338,6 +385,41 @@ function handleSyncMatch(): Promise<void> {
         >
           ⚠ 以下场次因球队未入库已跳过:{{
             matchResult.skipped_matches.join(';')
+          }}
+        </p>
+      </div>
+
+      <!-- 赛果同步结果 -->
+      <div v-if="resultSyncOutcome" class="collector__result">
+        <div class="collector__result-head">
+          <span class="collector__result-badge">赛果已同步</span>
+          <strong>{{ resultSyncOutcome.date }}</strong>
+          <span class="collector__result-source">来源:{{ resultSyncOutcome.source }}</span>
+        </div>
+        <dl class="collector__result-fields">
+          <div>
+            <dt>已开赛场次</dt>
+            <dd>{{ resultSyncOutcome.day_result_count }}</dd>
+          </div>
+          <div>
+            <dt>新建赛果</dt>
+            <dd>{{ resultSyncOutcome.created_count }}</dd>
+          </div>
+          <div>
+            <dt>更新赛果</dt>
+            <dd>{{ resultSyncOutcome.updated_count }}</dd>
+          </div>
+          <div>
+            <dt>回写比分</dt>
+            <dd>{{ resultSyncOutcome.game_updated_count }}</dd>
+          </div>
+        </dl>
+        <p
+          v-if="resultSyncOutcome.skipped_matches.length > 0"
+          class="collector__result-note"
+        >
+          ⚠ 以下场次未入库已跳过:{{
+            resultSyncOutcome.skipped_matches.join(';')
           }}
         </p>
       </div>

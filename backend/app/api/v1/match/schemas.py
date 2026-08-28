@@ -73,6 +73,31 @@ class MatchScoreUpdate(BaseModel):
     away_score: int = Field(ge=0)
 
 
+# ---------- 赛果开奖 ----------
+
+class MatchResultRead(BaseModel):
+    """赛果开奖响应模型(开奖页展示口径)。"""
+
+    match_id: str = Field(description="比赛全局唯一标识")
+    match_num_str: str = Field(description="场次编号,如 周二002")
+    league_name: str = Field(description="联赛名称")
+    home_team_name: str = Field(description="主队名称")
+    away_team_name: str = Field(description="客队名称")
+    match_time: datetime.datetime = Field(description="开赛时间")
+    goal_line: str | None = Field(default=None, description="让球盘口,如 -1")
+    half_score: str | None = Field(default=None, description="半场比分,如 0:1")
+    full_score: str | None = Field(default=None, description="全场比分,如 1:2")
+    had: str | None = Field(default=None, description="胜平负开奖结果,如 客胜")
+    hhad: str | None = Field(default=None, description="让球胜平负开奖结果,如 让球客胜")
+    crs: str | None = Field(default=None, description="比分开奖结果,如 1:2")
+    ttg: str | None = Field(default=None, description="总进球开奖结果,如 3")
+    hafu: str | None = Field(default=None, description="半全场开奖结果,如 负负")
+    sp_h: float | None = Field(default=None, description="主胜开奖 SP")
+    sp_d: float | None = Field(default=None, description="平局开奖 SP")
+    sp_a: float | None = Field(default=None, description="客胜开奖 SP")
+    pool_status: str = Field(description="开奖状态,如 Payout=已开奖")
+
+
 # ---------- 比赛事件 ----------
 
 class MatchEventCreate(BaseModel):

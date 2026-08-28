@@ -24,6 +24,12 @@ _MATCH_DAY_LIST_PATH = "/gateway/uniform/football/getMatchListV1.qry"
 # 混合过关计算器接口(全部 5 种玩法赔率;matchId 与在售赛程一致)
 _MATCH_ODDS_PATH = "/gateway/jc/football/getMatchCalculatorV1.qry"
 _MATCH_ODDS_POOL_CODES = "HAD,HHAD,CRS,TTG,HAFU"
+# 赛果开奖接口(足球赛果开奖页数据,matchId 与在售赛程一致)
+_MATCH_RESULT_PATH = "/gateway/uniform/football/getUniformMatchResultV1.qry"
+# 单页赛果条数(接口默认 30,配合翻页使用)
+_MATCH_RESULT_PAGE_SIZE = 30
+# 翻页上限(防止源站 total 异常导致死循环)
+_MATCH_RESULT_MAX_PAGES = 20
 
 _REQUEST_TIMEOUT_SECONDS = 15.0
 
@@ -379,3 +385,56 @@ async def fetch_match_odds() -> list[dict[str, typing.Any]]:
                 }
             )
     return odds_list
+
+
+async def fetch_match_results(date: str) -> list[dict[str, typing.Any]]:
+    """拉取指定比赛日的竞彩赛果开奖数据(足球赛果开奖页数据)。
+
+    对应页面 https://www.sporttery.cn/jc/zqsgkj/ ,接口按比赛日区间返回
+    已开奖场次,每场含全场/半场比分、胜平负结果(winFlag)、让球盘口与
+    胜平负开奖 SP;``matchId`` 与赛程列表一致。此处翻页聚合全部结果,
+    未开奖的日期返回空列表。
+
+    Args:
+        date: 比赛日,格式 ``YYYY-MM-DD``。
+
+    Returns:
+        赛果条目列表(原始字段,含 matchId/matchNumStr/leagueName/
+        sectionsNo1/sectionsNo999/winFlag/goalLine/h/d/a/poolStatus)。
+
+    Raises:
+        ExternalSourceError: 网络失败或结构异常。
+    """
+    results: list[dict[str, typing.Any]] = []
+    page_no = 1
+    try:
+        async with _client() as client:
+            for _ in range(_MATCH_RESULT_MAX_PAGES):
+                payload = await _get_json(
+                    client,
+                    _MATCH_RESULT_PATH,
+                    {
+                        "matchBeginDate": date,
+                        "matchEndDate": date,
+                        "leagueId": "",
+                        "pageSize": str(_MATCH_RESULT_PAGE_SIZE),
+                        "pageNo": str(page_no),
+                        "isFix": "0",
+                        "matchPage": "1",
+                        "pcOrWap": "1",
+                    },
+                )
+                value = _extract_value(payload, "竞彩赛果")
+                page_items = [
+                    item
+                    for item in value.get("matchResult") or []
+                    if isinstance(item, dict) and item.get("matchId")
+                ]
+                results.extend(page_items)
+                total = value.get("total") or 0
+                if len(results) >= int(total) or len(page_items) < _MATCH_RESULT_PAGE_SIZE:
+                    break
+                page_no += 1
+    except ExternalSourceError as exc:
+        raise ExternalSourceError("竞彩赛果拉取失败,请稍后重试", detail=exc.detail) from exc
+    return results

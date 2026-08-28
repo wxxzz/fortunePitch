@@ -12,6 +12,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     Enum,
+    Float,
     ForeignKey,
     Integer,
     String,
@@ -65,6 +66,7 @@ class MatchGame(Base):
     away_team: Mapped["Team"] = relationship(foreign_keys=[away_team_id])
     events: Mapped[list["MatchEvent"]] = relationship(back_populates="game")
     odds: Mapped["MatchOdds | None"] = relationship(back_populates="game")
+    result: Mapped["MatchResult | None"] = relationship(back_populates="game")
 
 
 class MatchOdds(Base):
@@ -87,6 +89,45 @@ class MatchOdds(Base):
     )
 
     game: Mapped["MatchGame"] = relationship(back_populates="odds")
+
+
+class MatchResult(Base):
+    """比赛赛果表(fp_match_results):竞彩赛果开奖数据。
+
+    每场比赛一行,记录半/全场比分与 5 种玩法的开奖结果(由采集模块
+    从比分与让球盘口推导),取消/无效场次比分为 NULL 仅保留状态。
+    """
+
+    __tablename__ = "fp_match_results"
+
+    match_id: Mapped[str] = mapped_column(
+        ForeignKey("fp_match_games.match_id"), primary_key=True
+    )
+    # 场次编号,如“周二002”
+    match_num_str: Mapped[str] = mapped_column(String(16), nullable=False, default="")
+    # 让球盘口(如 "-1"),未开售让球玩法时为 NULL
+    goal_line: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    half_home_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    half_away_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    full_home_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    full_away_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # 各玩法开奖结果(中文标签,如“客胜”/“让球主胜”/“1:2”/“3”/“负负”)
+    had: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    hhad: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    crs: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    ttg: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    hafu: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    # 胜平负开奖 SP 值
+    sp_h: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sp_d: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sp_a: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # 开奖状态(如 Payout=已开奖),取消场次保留原始状态
+    pool_status: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    update_time: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=datetime.datetime.now
+    )
+
+    game: Mapped["MatchGame"] = relationship(back_populates="result")
 
 
 class MatchEvent(Base):

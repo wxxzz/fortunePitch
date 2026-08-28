@@ -23,6 +23,11 @@ const router = createRouter({
       component: () => import('@/views/match/MatchCenterView.vue'),
     },
     {
+      path: '/results',
+      name: 'match-results',
+      component: () => import('@/views/match/MatchResultsView.vue'),
+    },
+    {
       path: '/match/:matchId',
       name: 'match-detail',
       component: () => import('@/views/match/MatchDetailView.vue'),
