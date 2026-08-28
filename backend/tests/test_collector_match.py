@@ -114,6 +114,9 @@ SAMPLE_ODDS: list[dict[str, typing.Any]] = [
             },
             "crs": {
                 "s01s00": "7.00", "s01s01": "6.50", "s1sh": "30.00",
+                # 线上真实响应还包含 f 后缀副本键与元数据键,解析时必须跳过
+                "s01s00f": "7.10", "s1shf": "31.00", "goalLine": "-1",
+                "goalLineValue": "-1.0",
                 "updateDate": "2026-08-24", "updateTime": "10:00:03",
             },
             "hafu": {
@@ -226,6 +229,22 @@ class TestOddsParsers:
         pools = odds_parser.build_odds_pools({"had": {"h": "2.15"}})
         assert len(pools) == 1
         assert [o["code"] for o in pools[0]["options"]] == ["h"]
+
+    def test_build_odds_pools_skips_crs_noise_keys(self) -> None:
+        # f 后缀副本键 / 元数据键不进入比分选项,不抛异常
+        pools = odds_parser.build_odds_pools(
+            {
+                "crs": {
+                    "s00s01": "8.00", "s00s01f": "8.10",
+                    "s1sh": "30.00", "s1shf": "31.00",
+                    "s1sa": "50.00", "s1saf": "51.00",
+                    "goalLine": "-1", "goalLineValue": "-1.0",
+                    "updateDate": "2026-08-26", "updateTime": "10:00:00",
+                }
+            }
+        )
+        assert len(pools) == 1
+        assert [o["code"] for o in pools[0]["options"]] == ["s00s01", "s1sh", "s1sa"]
 
     def test_build_odds_record(self) -> None:
         fields = odds_parser.build_odds_record(SAMPLE_ODDS[0])

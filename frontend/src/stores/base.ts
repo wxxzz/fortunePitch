@@ -23,6 +23,25 @@ import {
   type PlayerCreateParams,
 } from '@/api/base/player'
 
+/** 单页条数上限(后端接口限制 le=100) */
+const PAGE_LIMIT = 100
+
+/** 分页拉取全量数据(球队/球员可能远超单页上限) */
+async function fetchAllPages<T>(
+  fetchPage: (offset: number) => Promise<T[]>,
+): Promise<T[]> {
+  const all: T[] = []
+  let offset = 0
+  for (;;) {
+    const page = await fetchPage(offset)
+    all.push(...page)
+    if (page.length < PAGE_LIMIT) {
+      return all
+    }
+    offset += PAGE_LIMIT
+  }
+}
+
 export const useBaseStore = defineStore('base', () => {
   const leagues = ref<League[]>([])
   const teams = ref<Team[]>([])
@@ -36,9 +55,9 @@ export const useBaseStore = defineStore('base', () => {
     error.value = null
     try {
       const [leagueList, teamList, playerList] = await Promise.all([
-        listLeagues({ limit: 100 }),
-        listTeams({ limit: 100 }),
-        listPlayers({ limit: 100 }),
+        fetchAllPages((offset) => listLeagues({ offset, limit: PAGE_LIMIT })),
+        fetchAllPages((offset) => listTeams({ offset, limit: PAGE_LIMIT })),
+        fetchAllPages((offset) => listPlayers({ offset, limit: PAGE_LIMIT })),
       ])
       leagues.value = leagueList
       teams.value = teamList
@@ -53,19 +72,25 @@ export const useBaseStore = defineStore('base', () => {
   /** 新增联赛 */
   async function addLeague(payload: LeagueCreateParams): Promise<void> {
     await createLeague(payload)
-    leagues.value = await listLeagues({ limit: 100 })
+    leagues.value = await fetchAllPages((offset) =>
+      listLeagues({ offset, limit: PAGE_LIMIT }),
+    )
   }
 
   /** 新增球队 */
   async function addTeam(payload: TeamCreateParams): Promise<void> {
     await createTeam(payload)
-    teams.value = await listTeams({ limit: 100 })
+    teams.value = await fetchAllPages((offset) =>
+      listTeams({ offset, limit: PAGE_LIMIT }),
+    )
   }
 
   /** 新增球员 */
   async function addPlayer(payload: PlayerCreateParams): Promise<void> {
     await createPlayer(payload)
-    players.value = await listPlayers({ limit: 100 })
+    players.value = await fetchAllPages((offset) =>
+      listPlayers({ offset, limit: PAGE_LIMIT }),
+    )
   }
 
   /** 删除联赛 */

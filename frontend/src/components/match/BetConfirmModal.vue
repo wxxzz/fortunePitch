@@ -165,7 +165,7 @@ async function handleConfirm(): Promise<void> {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: vars.$spacing-md vars.$spacing-lg);
+    padding: vars.$spacing-md vars.$spacing-lg;
     background: linear-gradient(135deg, #1a7a4a, #0f5132);
     color: #fff;
   }
@@ -188,7 +188,7 @@ async function handleConfirm(): Promise<void> {
   &__list {
     flex: 1;
     margin: 0;
-    padding: vars.$spacing-md vars.$spacing-lg);
+    padding: vars.$spacing-md vars.$spacing-lg;
     list-style: none;
     overflow-y: auto;
   }
@@ -228,7 +228,7 @@ async function handleConfirm(): Promise<void> {
     align-items: center;
     justify-content: space-between;
     gap: vars.$spacing-md;
-    padding: vars.$spacing-md vars.$spacing-lg);
+    padding: vars.$spacing-md vars.$spacing-lg;
     border-top: 1px solid vars.$color-border;
     background: vars.$color-bg;
   }
@@ -243,8 +243,8 @@ async function handleConfirm(): Promise<void> {
 
   &__stake-input {
     width: 90px;
-    padding: 4px vars.$spacing-sm);
-    border: 1px solid vars.$color-border);
+    padding: 4px vars.$spacing-sm;
+    border: 1px solid vars.$color-border;
     border-radius: vars.$border-radius;
     font-size: vars.$font-size-md;
     text-align: right;
@@ -271,7 +271,7 @@ async function handleConfirm(): Promise<void> {
 
   &__error {
     margin: 0;
-    padding: 0 vars.$spacing-lg) vars.$spacing-sm);
+    padding: 0 vars.$spacing-lg vars.$spacing-sm;
     font-size: vars.$font-size-sm;
     color: vars.$color-danger;
   }
@@ -279,7 +279,7 @@ async function handleConfirm(): Promise<void> {
   &__footer {
     display: flex;
     gap: vars.$spacing-md;
-    padding: vars.$spacing-md vars.$spacing-lg) vars.$spacing-lg);
+    padding: vars.$spacing-md vars.$spacing-lg vars.$spacing-lg;
   }
 
   &__cancel,
@@ -294,11 +294,11 @@ async function handleConfirm(): Promise<void> {
   }
 
   &__cancel {
-    background: vars.$color-surface-hover);
-    color: vars.$color-text-secondary);
+    background: vars.$color-surface-hover;
+    color: vars.$color-text-secondary;
 
     &:hover {
-      background: vars.$color-border);
+      background: vars.$color-border;
     }
   }
 

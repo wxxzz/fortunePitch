@@ -4,7 +4,7 @@
  * 渐变头部(联赛/编号/时间/状态 + 对阵)+ 玩法标签页 + 选项赔率网格。
  * 选项勾选状态由 selection store 全局管理,底部选注栏联动。
  */
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { MatchGame } from '@/api/match/game'
 import { useSelectionStore } from '@/stores/selection'
 
@@ -32,6 +32,16 @@ const pools = computed(() => props.game.odds?.pools ?? [])
 const activePoolCode = ref<string>(pools.value[0]?.poolCode ?? '')
 const activePool = computed(
   () => pools.value.find((p) => p.poolCode === activePoolCode.value) ?? null,
+)
+
+/** 赔率异步到达或当前玩法消失时,回退到第一个有数据的玩法 */
+watch(
+  () => pools.value.map((p) => p.poolCode).join(','),
+  (codes) => {
+    if (!codes.split(',').includes(activePoolCode.value)) {
+      activePoolCode.value = pools.value[0]?.poolCode ?? ''
+    }
+  },
 )
 
 /** 玩法标签名(让球玩法附带盘口,如"让球(-1)") */
@@ -262,7 +272,7 @@ function isSelectedOption(optionCode: string): boolean {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
     gap: vars.$spacing-sm;
-    padding: vars.$spacing-md vars.$spacing-lg);
+    padding: vars.$spacing-md vars.$spacing-lg;
   }
 
   &__option {
@@ -306,7 +316,7 @@ function isSelectedOption(optionCode: string): boolean {
 
   &__empty {
     margin: 0;
-    padding: vars.$spacing-md vars.$spacing-lg);
+    padding: vars.$spacing-md vars.$spacing-lg;
     font-size: vars.$font-size-sm;
     color: vars.$color-text-secondary;
   }

@@ -7,6 +7,7 @@
 - 组合出可直接入库的 MatchOdds 字段字典
 """
 
+import re
 import typing
 
 from app.core.exceptions import DataValidationError
@@ -47,6 +48,11 @@ _CRS_SPECIAL = {
     "s1sa": "负其他",
 }
 
+# 比分键(s+主队2位+s+客队2位,如 s01s02)。
+# 原始字典中还存在 f 后缀副本键(如 s01s02f)与 goalLine/updateDate 等
+# 元数据键,必须严格匹配正则才能进入比分解析。
+_CRS_SCORE_RE = re.compile(r"^s(\d{2})s(\d{2})$")
+
 
 def _build_option(
     code: str, label: str, raw_odds: typing.Any
@@ -61,9 +67,9 @@ def _build_option(
     return {"code": code, "label": label, "odds": odds}
 
 
-def _build_crs_label(key: str) -> str:
-    """比分键转展示标签:``s01s02`` -> ``1:2``(s+主队2位+s+客队2位)。"""
-    return f"{int(key[1:3])}:{int(key[4:6])}"
+def _build_crs_label(match: re.Match[str]) -> str:
+    """比分正则匹配结果转展示标签:``s01s02`` -> ``1:2``。"""
+    return f"{int(match.group(1))}:{int(match.group(2))}"
 
 
 def build_odds_pools(
@@ -127,7 +133,10 @@ def build_odds_pools(
     for key in sorted(k for k in crs if k.startswith("s") and "s" in k[1:]):
         if key in _CRS_SPECIAL:
             continue
-        opt = _build_option(key, _build_crs_label(key), crs.get(key))
+        score_match = _CRS_SCORE_RE.match(key)
+        if score_match is None:
+            continue
+        opt = _build_option(key, _build_crs_label(score_match), crs.get(key))
         if opt is not None:
             crs_options.append(opt)
     for key, label in _CRS_SPECIAL.items():

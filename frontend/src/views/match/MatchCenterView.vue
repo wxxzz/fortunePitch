@@ -1,8 +1,8 @@
 <script setup lang="ts">
 /**
- * 页面A:赛事中心(Match Center)- 列表页。
- * 顶部筛选区 + 赛事列表区(左:联赛/时间/状态;中:对阵与标签;右:核心赔率)
- * + 右侧边栏(今日焦点推荐)。
+ * 页面A:赛事中心(Match Center)- 列表页(融合式)。
+ * 顶部筛选区 + 赛事玩法赔率卡片流(MatchOddsCard)
+ * + 右侧边栏(今日焦点推荐)+ 底部选注栏与投注确认弹窗。
  */
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
@@ -10,9 +10,9 @@ import { storeToRefs } from 'pinia'
 import { useMatchStore } from '@/stores/match'
 import { useBaseStore } from '@/stores/base'
 import FocusRecommendCard from '@/components/match/FocusRecommendCard.vue'
-import OddsTrendChart, {
-  type OddsTrendPoint,
-} from '@/components/strategy/OddsTrendChart.vue'
+import MatchOddsCard from '@/components/match/MatchOddsCard.vue'
+import SelectionBar from '@/components/match/SelectionBar.vue'
+import BetConfirmModal from '@/components/match/BetConfirmModal.vue'
 
 const router = useRouter()
 const matchStore = useMatchStore()
@@ -29,8 +29,15 @@ onMounted(() => {
 // ---------- 筛选区 ----------
 
 const selectedLeagueId = ref<number | null>(null)
-const selectedDate = ref<string>('')
+// 默认筛选当天(本地时区),可通过日期控件清空查看全部
+const selectedDate = ref<string>(formatLocalDate(new Date()))
 const isTopFiveOnly = ref(false)
+
+/** 本地时区的 YYYY-MM-DD(toISOString 会偏移到 UTC,凌晨场次会算错日) */
+function formatLocalDate(date: Date): string {
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+}
 
 /** 五大联赛关键字(数据源筛选:仅看五大联赛) */
 const TOP_FIVE_KEYWORDS = ['英超', '西甲', '意甲', '德甲', '法甲']
@@ -54,7 +61,7 @@ const filteredGames = computed(() =>
       }
     }
     if (selectedDate.value) {
-      const gameDate = new Date(game.match_time).toISOString().slice(0, 10)
+      const gameDate = formatLocalDate(new Date(game.match_time))
       if (gameDate !== selectedDate.value) {
         return false
       }
@@ -71,34 +78,32 @@ const filteredGames = computed(() =>
 
 // ---------- 赛事列表 ----------
 
-const expandedMatchId = ref<string | null>(null)
-
-const statusLabel: Record<string, string> = {
-  PENDING: '未开',
-  LIVE: '滚球',
-  FINISHED: '终场',
-}
-
 const teamName = (teamId: number): string =>
   teams.value.find((t) => t.team_id === teamId)?.team_name ?? `球队 #${teamId}`
 
-/** 比赛核心标签(接入数据源后由后端下发) */
-const matchTags = (_matchId: string): string[] => []
-
-/** 演示用赔率走势(数据源接入后替换为该场真实欧赔历史) */
-const demoTrendPoints = (matchId: string): OddsTrendPoint[] => [
-  { time: 'T-5d', homeWin: 2.1, draw: 3.4, awayWin: 3.2 },
-  { time: 'T-3d', homeWin: 2.0, draw: 3.45, awayWin: 3.35 },
-  { time: 'T-1d', homeWin: 1.92, draw: 3.5, awayWin: 3.6 },
-  { time: '即时', homeWin: 1.88, draw: 3.55, awayWin: 3.7 },
-]
-
-function toggleExpand(matchId: string): void {
-  expandedMatchId.value = expandedMatchId.value === matchId ? null : matchId
-}
-
 function handleOpenDetail(matchId: string): void {
   void router.push(`/match/${matchId}`)
+}
+
+// ---------- 选注与投注确认 ----------
+
+const isConfirmVisible = ref(false)
+const successMessage = ref('')
+
+function openConfirm(): void {
+  isConfirmVisible.value = true
+}
+
+function closeConfirm(): void {
+  isConfirmVisible.value = false
+}
+
+function handleConfirmSuccess(decisionCount: number): void {
+  isConfirmVisible.value = false
+  successMessage.value = `已提交 ${decisionCount} 条模拟决策,可在策略中心复盘`
+  window.setTimeout(() => {
+    successMessage.value = ''
+  }, 4000)
 }
 </script>
 
@@ -130,70 +135,21 @@ function handleOpenDetail(matchId: string): void {
 
       <p v-if="error" class="match-center__error" role="alert">{{ error }}</p>
       <p v-if="isLoading" class="match-center__hint">加载中…</p>
+      <p v-if="successMessage" class="match-center__success" role="status">
+        {{ successMessage }}
+      </p>
 
-      <!-- 赛事列表区 -->
+      <!-- 赛事玩法赔率卡片流 -->
       <div class="match-center__list">
-        <div
+        <MatchOddsCard
           v-for="game in filteredGames"
           :key="game.match_id"
-          class="match-center__row"
-        >
-          <div class="match-center__row-main" @click="toggleExpand(game.match_id)">
-            <!-- 左:联赛 / 开赛时间 / 状态 -->
-            <div class="match-center__row-left">
-              <span class="match-center__league">
-                {{ teamLeagueName.get(game.home_team_id) || '未知联赛' }}
-              </span>
-              <span class="match-center__time">
-                {{ new Date(game.match_time).toLocaleString() }}
-              </span>
-              <span
-                class="match-center__status"
-                :class="`match-center__status--${game.match_status.toLowerCase()}`"
-              >
-                {{ statusLabel[game.match_status] ?? game.match_status }}
-              </span>
-            </div>
-
-            <!-- 中:主队 vs 客队 + 核心标签 -->
-            <div class="match-center__row-middle">
-              <div class="match-center__versus">
-                <span class="match-center__team">{{ teamName(game.home_team_id) }}</span>
-                <span
-                  v-if="game.home_score !== null"
-                  class="match-center__score"
-                >
-                  {{ game.home_score }} : {{ game.away_score }}
-                </span>
-                <span v-else class="match-center__vs">vs</span>
-                <span class="match-center__team">{{ teamName(game.away_team_id) }}</span>
-              </div>
-              <div class="match-center__tags">
-                <span v-for="tag in matchTags(game.match_id)" :key="tag" class="match-center__tag">
-                  {{ tag }}
-                </span>
-              </div>
-            </div>
-
-            <!-- 右:核心赔率(演示) + 操作 -->
-            <div class="match-center__row-right">
-              <span class="match-center__odds-hint">欧赔 / 亚盘</span>
-              <button
-                class="match-center__detail-btn"
-                type="button"
-                @click.stop="handleOpenDetail(game.match_id)"
-              >
-                深度分析
-              </button>
-            </div>
-          </div>
-
-          <!-- 展开区:赔率走势迷你折线图 -->
-          <div v-if="expandedMatchId === game.match_id" class="match-center__expand">
-            <OddsTrendChart :points="demoTrendPoints(game.match_id)" />
-            <p class="match-center__hint">演示数据 · 赔率数据源接入后展示真实走势</p>
-          </div>
-        </div>
+          :game="game"
+          :league-name="teamLeagueName.get(game.home_team_id) ?? ''"
+          :home-name="teamName(game.home_team_id)"
+          :away-name="teamName(game.away_team_id)"
+          @open-detail="handleOpenDetail"
+        />
         <p v-if="!isLoading && filteredGames.length === 0" class="match-center__hint">
           暂无符合条件的比赛
         </p>
@@ -204,6 +160,16 @@ function handleOpenDetail(matchId: string): void {
     <aside class="match-center__aside">
       <FocusRecommendCard />
     </aside>
+
+    <!-- 底部选注栏(有选注时固定悬浮) -->
+    <SelectionBar @open-confirm="openConfirm" />
+
+    <!-- 投注确认弹窗 -->
+    <BetConfirmModal
+      v-if="isConfirmVisible"
+      @close="closeConfirm"
+      @success="handleConfirmSuccess"
+    />
   </div>
 </template>
 
@@ -214,6 +180,8 @@ function handleOpenDetail(matchId: string): void {
   display: flex;
   gap: vars.$spacing-lg;
   align-items: flex-start;
+  // 为底部固定选注栏留出空间
+  padding-bottom: 72px;
 
   &__main {
     flex: 1;
@@ -268,6 +236,14 @@ function handleOpenDetail(matchId: string): void {
     color: vars.$color-danger;
   }
 
+  &__success {
+    padding: vars.$spacing-sm vars.$spacing-md;
+    border-radius: vars.$border-radius;
+    background: vars.$color-primary-light;
+    color: vars.$color-primary;
+    font-size: vars.$font-size-sm;
+  }
+
   &__hint {
     font-size: vars.$font-size-sm;
     color: vars.$color-text-secondary;
@@ -276,136 +252,7 @@ function handleOpenDetail(matchId: string): void {
   &__list {
     display: flex;
     flex-direction: column;
-    gap: vars.$spacing-sm;
-  }
-
-  &__row {
-    background: vars.$color-surface;
-    border: 1px solid vars.$color-border;
-    border-radius: vars.$border-radius;
-    overflow: hidden;
-  }
-
-  &__row-main {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: vars.$spacing-lg;
-    padding: vars.$spacing-md vars.$spacing-lg;
-    cursor: pointer;
-
-    &:hover {
-      background: vars.$color-surface-hover;
-    }
-  }
-
-  &__row-left {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    width: 170px;
-    flex-shrink: 0;
-  }
-
-  &__league {
-    font-weight: 600;
-  }
-
-  &__time {
-    font-size: vars.$font-size-sm;
-    color: vars.$color-text-secondary;
-  }
-
-  &__status {
-    align-self: flex-start;
-    padding: 0 vars.$spacing-xs;
-    border-radius: 4px;
-    font-size: 11px;
-    color: #fff;
-    background: vars.$color-neutral;
-
-    &--live {
-      background: vars.$color-positive;
-    }
-
-    &--finished {
-      background: vars.$color-neutral;
-    }
-
-    &--pending {
-      background: vars.$color-warning;
-    }
-  }
-
-  &__row-middle {
-    flex: 1;
-    min-width: 0;
-  }
-
-  &__versus {
-    display: flex;
-    align-items: center;
     gap: vars.$spacing-md;
-    font-size: 15px;
-  }
-
-  &__team {
-    font-weight: 600;
-  }
-
-  &__score {
-    color: vars.$color-positive;
-    font-weight: 700;
-  }
-
-  &__vs {
-    color: vars.$color-text-secondary;
-    font-size: vars.$font-size-sm;
-  }
-
-  &__tags {
-    margin-top: vars.$spacing-xs;
-  }
-
-  &__tag {
-    display: inline-block;
-    margin-right: vars.$spacing-xs;
-    padding: 0 vars.$spacing-sm;
-    border: 1px solid vars.$color-border;
-    border-radius: 999px;
-    font-size: 11px;
-    color: vars.$color-text-secondary;
-  }
-
-  &__row-right {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: vars.$spacing-xs;
-    flex-shrink: 0;
-  }
-
-  &__odds-hint {
-    font-size: 11px;
-    color: vars.$color-text-secondary;
-  }
-
-  &__detail-btn {
-    padding: vars.$spacing-xs vars.$spacing-md;
-    border: 1px solid vars.$color-primary;
-    border-radius: vars.$border-radius;
-    background: transparent;
-    color: vars.$color-primary;
-    cursor: pointer;
-
-    &:hover {
-      background: vars.$color-primary;
-      color: #fff;
-    }
-  }
-
-  &__expand {
-    padding: 0 vars.$spacing-lg vars.$spacing-md;
   }
 }
 </style>
