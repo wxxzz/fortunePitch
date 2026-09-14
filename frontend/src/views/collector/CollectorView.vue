@@ -9,11 +9,13 @@
 import { computed, onMounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import {
+  syncFundamentals,
   syncLeague,
   syncPlayers,
   syncTeams,
   type LeagueSyncResult,
   type PlayerSyncResult,
+  type TeamFundamentalsSyncResult,
   type TeamSyncResult,
 } from '@/api/collector/league'
 import {
@@ -27,7 +29,7 @@ import { useBaseStore } from '@/stores/base'
 const baseStore = useBaseStore()
 const { leagues, teams, players, isLoading } = storeToRefs(baseStore)
 
-type SyncKind = 'league' | 'team' | 'player' | 'match' | 'result'
+type SyncKind = 'league' | 'team' | 'player' | 'fundamental' | 'match' | 'result'
 
 const leagueName = ref('西甲')
 const matchDate = ref(todayIso())
@@ -39,6 +41,7 @@ const syncError = ref<string | null>(null)
 
 const leagueResult = ref<LeagueSyncResult | null>(null)
 const teamResult = ref<TeamSyncResult | null>(null)
+const fundamentalResult = ref<TeamFundamentalsSyncResult | null>(null)
 const playerResult = ref<PlayerSyncResult | null>(null)
 const matchResult = ref<MatchSyncResult | null>(null)
 const resultSyncOutcome = ref<ResultSyncResult | null>(null)
@@ -56,6 +59,8 @@ const syncingHint = computed(() => {
       return '正在从竞彩网拉取联赛信息…'
     case 'team':
       return '正在拉取联赛档案与积分榜球队清单…'
+    case 'fundamental':
+      return '正在拉取积分榜总/主/客三榜,补齐球队基本面…'
     case 'player':
       return '正在扫描比赛数据收集球员名单,可能需要数十秒…'
     case 'match':
@@ -100,6 +105,7 @@ async function runSync(kind: SyncKind, task: () => Promise<void>): Promise<void>
 function clearResults(keep: SyncKind): void {
   if (keep !== 'league') leagueResult.value = null
   if (keep !== 'team') teamResult.value = null
+  if (keep !== 'fundamental') fundamentalResult.value = null
   if (keep !== 'player') playerResult.value = null
   if (keep !== 'match') matchResult.value = null
   if (keep !== 'result') resultSyncOutcome.value = null
@@ -116,6 +122,13 @@ function handleSyncTeams(): Promise<void> {
   return runSync('team', async () => {
     teamResult.value = await syncTeams(leagueName.value.trim())
     clearResults('team')
+  })
+}
+
+function handleSyncFundamentals(): Promise<void> {
+  return runSync('fundamental', async () => {
+    fundamentalResult.value = await syncFundamentals(leagueName.value.trim())
+    clearResults('fundamental')
   })
 }
 
@@ -147,7 +160,7 @@ function handleSyncResult(): Promise<void> {
       <h2 class="collector__title">数据采集 · 竞彩网档案同步</h2>
       <p class="collector__subtitle">
         数据来源:中国竞彩网。联赛/球队/球员档案来自联赛资料(sporttery.cn/zqlszl),
-        在售赛程来自赛程赛果页(sporttery.cn/jc/zqszsc),赛果开奖来自
+        球队基本面来自积分榜(总/主/客三榜),在售赛程来自赛程赛果页(sporttery.cn/jc/zqszsc),赛果开奖来自
         赛果开奖页(sporttery.cn/jc/zqsgkj)。重复同步时更新已有记录。
       </p>
     </header>
@@ -181,6 +194,14 @@ function handleSyncResult(): Promise<void> {
             @click="handleSyncTeams"
           >
             同步球队
+          </button>
+          <button
+            class="collector__btn"
+            type="button"
+            :disabled="!canSubmit"
+            @click="handleSyncFundamentals"
+          >
+            同步基本面
           </button>
           <button
             class="collector__btn"
@@ -316,6 +337,34 @@ function handleSyncResult(): Promise<void> {
             <dd>{{ teamResult.updated_count }}</dd>
           </div>
         </dl>
+      </div>
+
+      <!-- 球队基本面同步结果 -->
+      <div v-if="fundamentalResult" class="collector__result">
+        <div class="collector__result-head">
+          <span class="collector__result-badge">球队基本面已同步</span>
+          <strong>{{ fundamentalResult.league.league_name }}({{ fundamentalResult.season }})</strong>
+          <span class="collector__result-source">来源:{{ fundamentalResult.source }}</span>
+        </div>
+        <dl class="collector__result-fields">
+          <div>
+            <dt>覆盖球队</dt>
+            <dd>{{ fundamentalResult.team_count }}</dd>
+          </div>
+          <div>
+            <dt>新建 / 更新</dt>
+            <dd>{{ fundamentalResult.created_count }} / {{ fundamentalResult.updated_count }}</dd>
+          </div>
+          <div>
+            <dt>数据维度</dt>
+            <dd>排名 / 胜负平 / 进失球 / 积分 / 胜率(总·主·客)</dd>
+          </div>
+        </dl>
+        <p v-if="fundamentalResult.skipped_teams.length > 0" class="collector__result-note">
+          ⚠ 积分榜未覆盖的球队(如赛季初尚未开赛):{{
+            fundamentalResult.skipped_teams.join('、')
+          }}
+        </p>
       </div>
 
       <!-- 球员同步结果 -->

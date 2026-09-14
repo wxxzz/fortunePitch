@@ -29,14 +29,22 @@ onMounted(() => {
 // ---------- 筛选区 ----------
 
 const selectedLeagueId = ref<number | null>(null)
-// 默认筛选当天(本地时区),可通过日期控件清空查看全部
-const selectedDate = ref<string>(formatLocalDate(new Date()))
+// 默认筛选当天及次日(本地时区),可通过日期控件清空查看全部
+const startDate = ref<string>(formatLocalDate(new Date()))
+const endDate = ref<string>(formatLocalDate(addDays(new Date(), 1)))
 const isTopFiveOnly = ref(false)
 
 /** 本地时区的 YYYY-MM-DD(toISOString 会偏移到 UTC,凌晨场次会算错日) */
 function formatLocalDate(date: Date): string {
   const pad = (n: number): string => String(n).padStart(2, '0')
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+}
+
+/** 加 n 天(保持本地时区) */
+function addDays(date: Date, days: number): Date {
+  const result = new Date(date)
+  result.setDate(result.getDate() + days)
+  return result
 }
 
 /** 五大联赛关键字(数据源筛选:仅看五大联赛) */
@@ -60,9 +68,12 @@ const filteredGames = computed(() =>
         return false
       }
     }
-    if (selectedDate.value) {
+    if (startDate.value || endDate.value) {
       const gameDate = formatLocalDate(new Date(game.match_time))
-      if (gameDate !== selectedDate.value) {
+      if (startDate.value && gameDate < startDate.value) {
+        return false
+      }
+      if (endDate.value && gameDate > endDate.value) {
         return false
       }
     }
@@ -125,7 +136,11 @@ function handleConfirmSuccess(decisionCount: number): void {
         </label>
         <label class="match-center__filter">
           <span>日期</span>
-          <input v-model="selectedDate" type="date" />
+          <div class="match-center__date-range">
+            <input v-model="startDate" type="date" />
+            <span class="match-center__date-sep">至</span>
+            <input v-model="endDate" type="date" />
+          </div>
         </label>
         <label class="match-center__filter match-center__filter--check">
           <input v-model="isTopFiveOnly" type="checkbox" />
@@ -230,6 +245,17 @@ function handleConfirmSuccess(decisionCount: number): void {
       align-items: center;
       padding-bottom: vars.$spacing-xs;
     }
+  }
+
+  &__date-range {
+    display: flex;
+    align-items: center;
+    gap: vars.$spacing-xs;
+  }
+
+  &__date-sep {
+    font-size: vars.$font-size-sm;
+    color: vars.$color-text-secondary;
   }
 
   &__error {

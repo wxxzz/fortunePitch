@@ -28,6 +28,18 @@ export interface TeamPlayerCount {
   player_count: number
 }
 
+/** 球队基本面同步结果 */
+export interface TeamFundamentalsSyncResult {
+  league: League
+  season: string
+  team_count: number
+  created_count: number
+  updated_count: number
+  skipped_teams: string[]
+  uniform_league_id: number
+  source: string
+}
+
 /** 球员同步结果 */
 export interface PlayerSyncResult {
   league: League
@@ -58,6 +70,18 @@ export async function syncLeague(leagueName: string): Promise<LeagueSyncResult> 
 export async function syncTeams(leagueName: string): Promise<TeamSyncResult> {
   const { data } = await request.post<TeamSyncResult>(
     '/api/v1/collector/teams/sync',
+    { league_name: leagueName },
+    { timeout: SYNC_TIMEOUT_MS },
+  )
+  return data
+}
+
+/** 按联赛名称同步球队基本面(积分榜总/主/客三榜,自动先同步联赛与球队) */
+export async function syncFundamentals(
+  leagueName: string,
+): Promise<TeamFundamentalsSyncResult> {
+  const { data } = await request.post<TeamFundamentalsSyncResult>(
+    '/api/v1/collector/fundamentals/sync',
     { league_name: leagueName },
     { timeout: SYNC_TIMEOUT_MS },
   )
