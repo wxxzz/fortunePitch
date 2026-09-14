@@ -22,6 +22,7 @@ from app.core.exceptions import LlmServiceError
 from app.main import app
 from app.models import (
     League,
+    LlmRequestLog,
     MatchGame,
     MatchLlmAnalysis,
     MatchLlmPlayRec,
@@ -83,9 +84,9 @@ _STUB_POOLS = [
 
 
 @pytest.fixture
-async def env() -> typing.AsyncGenerator[
-    tuple[AsyncClient, async_sessionmaker], None
-]:
+async def env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> typing.AsyncGenerator[tuple[AsyncClient, async_sessionmaker], None]:
     """返回测试客户端与会话工厂(会话用于预置联赛/球队/比赛/基本面/赔率)。"""
     engine = create_async_engine("sqlite+aiosqlite://")
 
@@ -98,6 +99,8 @@ async def env() -> typing.AsyncGenerator[
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    # 请求日志通过独立会话工厂写入,测试指向 SQLite 测试库(默认指向生产 MySQL)
+    monkeypatch.setattr(llm, "_log_session_factory", session_factory)
 
     async def override_session() -> object:
         async with session_factory() as session:
@@ -181,8 +184,8 @@ async def _seed_match(session_factory: async_sessionmaker) -> str:
 
 def _stub_chat(
     content: str = _STUB_LLM_CONTENT,
-) -> typing.Callable[..., typing.Awaitable[str]]:
-    """构造 _call_chat 测试桩:忽略入参,返回固定输出。"""
+) -> typing.Callable[..., typing.Awaitable[llm.LlmCallResult]]:
+    """构造 _call_chat 测试桩:忽略入参,返回固定输出(带计量信息)。"""
 
     async def fake_call(
         base_url: str,
@@ -190,8 +193,15 @@ def _stub_chat(
         model: str,
         messages: list[dict[str, str]],
         settings: Settings,
-    ) -> str:
-        return content
+    ) -> llm.LlmCallResult:
+        return llm.LlmCallResult(
+            content=content,
+            http_status=200,
+            prompt_tokens=100,
+            completion_tokens=50,
+            total_tokens=150,
+            duration_ms=123,
+        )
 
     return fake_call
 
@@ -410,9 +420,97 @@ class TestLlmAnalysisEndpoint:
             model: str,
             messages: list[dict[str, str]],
             settings: Settings,
-        ) -> str:
+        ) -> llm.LlmCallResult:
             raise LlmServiceError("大模型服务调用失败(网络错误)")
 
         monkeypatch.setattr(llm, "_call_chat", failing_call)
         response = await client.post(f"/api/v1/match/games/{match_id}/llm-analysis")
         assert response.status_code == 502
+
+    async def test_post_writes_success_request_log(
+        self,
+        env: tuple[AsyncClient, async_sessionmaker],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        client, session_factory = env
+        match_id = await _seed_match(session_factory)
+        monkeypatch.setattr(llm, "_call_chat", _stub_chat())
+
+        response = await client.post(f"/api/v1/match/games/{match_id}/llm-analysis")
+        assert response.status_code == 200
+
+        async with session_factory() as session:
+            logs = list(
+                (await session.execute(select(LlmRequestLog))).scalars().all()
+            )
+            assert len(logs) == 1
+            log = logs[0]
+            assert log.status == "SUCCESS"
+            assert log.match_id == match_id
+            assert log.provider in ("qwen", "ark")
+            assert log.http_status == 200
+            assert log.prompt_tokens == 100
+            assert log.completion_tokens == 50
+            assert log.duration_ms == 123
+            assert log.error_message is None
+            # 请求参数与提示词完整入日志
+            assert any("巴塞罗那" in m["content"] for m in log.request_messages)
+            assert log.request_params["max_tokens"] > 0
+            assert "HAD" in (log.response_content or "")
+
+    async def test_failed_call_writes_failed_request_log(
+        self,
+        env: tuple[AsyncClient, async_sessionmaker],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        client, session_factory = env
+        match_id = await _seed_match(session_factory)
+
+        async def failing_call(
+            base_url: str,
+            api_key: str,
+            model: str,
+            messages: list[dict[str, str]],
+            settings: Settings,
+        ) -> llm.LlmCallResult:
+            raise LlmServiceError(
+                "大模型服务返回错误(HTTP 500)", detail="upstream error", http_status=500
+            )
+
+        monkeypatch.setattr(llm, "_call_chat", failing_call)
+        response = await client.post(f"/api/v1/match/games/{match_id}/llm-analysis")
+        assert response.status_code == 502
+
+        async with session_factory() as session:
+            logs = list(
+                (await session.execute(select(LlmRequestLog))).scalars().all()
+            )
+            assert len(logs) == 1
+            log = logs[0]
+            assert log.status == "FAILED"
+            assert log.http_status == 500
+            assert log.error_message is not None
+            assert log.response_content is None
+
+    async def test_parse_failure_writes_log_with_response(
+        self,
+        env: tuple[AsyncClient, async_sessionmaker],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        client, session_factory = env
+        match_id = await _seed_match(session_factory)
+        monkeypatch.setattr(llm, "_call_chat", _stub_chat(content="抱歉,我无法完成该分析。"))
+
+        response = await client.post(f"/api/v1/match/games/{match_id}/llm-analysis")
+        assert response.status_code == 502
+
+        async with session_factory() as session:
+            logs = list(
+                (await session.execute(select(LlmRequestLog))).scalars().all()
+            )
+            assert len(logs) == 1
+            log = logs[0]
+            assert log.status == "FAILED"
+            # 调用成功但输出无法解析:响应原文保留,便于排障
+            assert log.response_content == "抱歉,我无法完成该分析。"
+            assert log.error_message is not None

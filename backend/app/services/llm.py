@@ -13,21 +13,24 @@ import dataclasses
 import datetime
 import json
 import logging
+import time
 import typing
 
 import httpx
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
 from app.core.config import Settings, get_settings
+from app.core.database import AsyncSessionLocal
 from app.core.exceptions import (
     LlmNotConfiguredError,
     LlmServiceError,
     ResourceNotFoundError,
 )
 from app.models import (
+    LlmRequestLog,
     MatchGame,
     MatchLlmAnalysis,
     MatchLlmPlayRec,
@@ -99,6 +102,24 @@ class LlmAnalysis(BaseModel):
     summary: str = Field(description="整体研判")
     plays: list[LlmPlayRecommendation] = Field(default_factory=list)
     risks: list[str] = Field(default_factory=list)
+
+
+@dataclasses.dataclass(frozen=True)
+class LlmCallResult:
+    """单次 chat/completions 调用的原始结果(含计量信息)。"""
+
+    content: str
+    http_status: int
+    prompt_tokens: int | None
+    completion_tokens: int | None
+    total_tokens: int | None
+    duration_ms: int
+
+
+# 请求日志的独立会话工厂:日志必须不受业务请求事务回滚影响,
+# 因此不复用请求级会话,单独开连接写入并提交。
+# 测试通过 monkeypatch 该属性指向 SQLite 测试库。
+_log_session_factory: async_sessionmaker = AsyncSessionLocal
 
 
 # ---------- 上下文聚合 ----------
@@ -275,10 +296,16 @@ def _resolve_provider_config(settings: Settings) -> tuple[str, str, str, str]:
     return provider, base_url, api_key, model
 
 
+def _usage_int(usage: dict[str, typing.Any], key: str) -> int | None:
+    """从 usage 字典安全取整数计量值。"""
+    value = usage.get(key)
+    return value if isinstance(value, int) else None
+
+
 async def _call_chat(
     base_url: str, api_key: str, model: str, messages: list[dict[str, str]], settings: Settings
-) -> str:
-    """调用 OpenAI 兼容 chat/completions,返回模型原始输出文本。
+) -> LlmCallResult:
+    """调用 OpenAI 兼容 chat/completions,返回原始输出与计量信息。
 
     单独成函数便于测试打桩(mock 网络层)。
     """
@@ -288,6 +315,7 @@ async def _call_chat(
         "temperature": 0.3,
         "max_tokens": settings.LLM_MAX_TOKENS,
     }
+    started = time.monotonic()
     try:
         async with httpx.AsyncClient(timeout=settings.LLM_TIMEOUT_SECONDS) as client:
             response = await client.post(
@@ -299,18 +327,30 @@ async def _call_chat(
         raise LlmServiceError(
             "大模型服务调用失败(网络错误)", detail=f"{type(exc).__name__}: {exc}"
         ) from exc
+    duration_ms = int((time.monotonic() - started) * 1000)
 
     if response.status_code != 200:
         raise LlmServiceError(
             f"大模型服务返回错误(HTTP {response.status_code})",
             detail=response.text[:500],
+            http_status=response.status_code,
         )
     try:
-        return str(response.json()["choices"][0]["message"]["content"])
+        body = response.json()
+        content = str(body["choices"][0]["message"]["content"])
     except (KeyError, IndexError, TypeError, ValueError) as exc:
         raise LlmServiceError(
-            "大模型服务响应结构异常", detail=str(exc)
+            "大模型服务响应结构异常", detail=str(exc), http_status=response.status_code
         ) from exc
+    usage = body.get("usage") if isinstance(body.get("usage"), dict) else {}
+    return LlmCallResult(
+        content=content,
+        http_status=response.status_code,
+        prompt_tokens=_usage_int(usage, "prompt_tokens"),
+        completion_tokens=_usage_int(usage, "completion_tokens"),
+        total_tokens=_usage_int(usage, "total_tokens"),
+        duration_ms=duration_ms,
+    )
 
 
 def _extract_json_text(content: str) -> str:
@@ -366,13 +406,99 @@ def _parse_analysis(content: str, context: MatchAnalysisContext) -> tuple[str, l
     return summary, plays, [str(r) for r in risks]
 
 
+async def _write_request_log(
+    *,
+    context: MatchAnalysisContext,
+    provider: str,
+    model: str,
+    base_url: str,
+    messages: list[dict[str, str]],
+    request_params: dict[str, typing.Any],
+    response: LlmCallResult | None,
+    status: str,
+    duration_ms: int,
+    error: LlmServiceError | None,
+) -> None:
+    """落一条大模型请求日志(独立会话写入并提交)。
+
+    日志失败只记录 warning,绝不影响主流程 —— 请求日志的意义
+    正是在业务请求失败(事务回滚)时也能留存调用痕迹。
+    """
+    log_row = LlmRequestLog(
+        match_id=context.match_id,
+        provider=provider,
+        model=model,
+        base_url=base_url,
+        request_messages=messages,
+        request_params=request_params,
+        response_content=response.content if response is not None else None,
+        status=status,
+        http_status=(
+            response.http_status if response is not None else (error.http_status if error else None)
+        ),
+        prompt_tokens=response.prompt_tokens if response is not None else None,
+        completion_tokens=response.completion_tokens if response is not None else None,
+        total_tokens=response.total_tokens if response is not None else None,
+        duration_ms=duration_ms,
+        error_message=error.message if error is not None else None,
+        error_detail=error.detail if error is not None else None,
+    )
+    try:
+        async with _log_session_factory() as log_session:
+            log_session.add(log_row)
+            await log_session.commit()
+    except Exception:
+        logger.warning("大模型请求日志写入失败", exc_info=True)
+
+
 async def analyze_match(context: MatchAnalysisContext) -> LlmAnalysis:
-    """完整分析流程:配置解析 -> 提示词 -> 调用 -> 解析校验。"""
+    """完整分析流程:配置解析 -> 提示词 -> 调用 -> 解析校验,全程记录请求日志。"""
     settings = get_settings()
     provider, base_url, api_key, model = _resolve_provider_config(settings)
     messages = build_analysis_messages(context)
-    content = await _call_chat(base_url, api_key, model, messages, settings)
-    summary, plays, risks = _parse_analysis(content, context)
+    request_params = {
+        "temperature": 0.3,
+        "max_tokens": settings.LLM_MAX_TOKENS,
+        "timeout_seconds": settings.LLM_TIMEOUT_SECONDS,
+    }
+    log_base = {
+        "context": context,
+        "provider": provider,
+        "model": model,
+        "base_url": base_url,
+        "messages": messages,
+        "request_params": request_params,
+    }
+    started = time.monotonic()
+    try:
+        result = await _call_chat(base_url, api_key, model, messages, settings)
+    except LlmServiceError as exc:
+        await _write_request_log(
+            **log_base,
+            response=None,
+            status="FAILED",
+            duration_ms=int((time.monotonic() - started) * 1000),
+            error=exc,
+        )
+        raise
+    try:
+        summary, plays, risks = _parse_analysis(result.content, context)
+    except LlmServiceError as exc:
+        await _write_request_log(
+            **log_base,
+            response=result,
+            status="FAILED",
+            duration_ms=result.duration_ms,
+            error=exc,
+        )
+        raise
+    await _write_request_log(
+        **log_base,
+        response=result,
+        status="SUCCESS",
+        duration_ms=result.duration_ms,
+        error=None,
+    )
     return LlmAnalysis(
         match_id=context.match_id,
         provider=provider,

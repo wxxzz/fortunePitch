@@ -68,7 +68,14 @@ class LlmNotConfiguredError(FortunePitchError):
 class LlmServiceError(FortunePitchError):
     """大模型调用失败(网络超时、接口报错、输出无法解析)。"""
 
-    def __init__(self, message: str, detail: str | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        detail: str | None = None,
+        http_status: int | None = None,
+    ) -> None:
+        # 保留远端 HTTP 状态码,供请求日志记录
+        self.http_status = http_status
         super().__init__(
             message=message,
             status_code=status.HTTP_502_BAD_GATEWAY,

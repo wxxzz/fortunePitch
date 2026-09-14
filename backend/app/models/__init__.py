@@ -5,9 +5,11 @@
 - match.py    比赛与赛果模块(fp_match_)
 - analytics.py 高阶数据分析模块(fp_analytics_)
 - strategy.py 策略与赔率模块(fp_strategy_)
+- llm.py      大模型日志模块(fp_llm_)
 """
 
 from app.models.analytics import PlayerMatchPerformance, TeamMatchStat
+from app.models.llm import LlmRequestLog
 from app.models.base import League, Player, Team, TeamFundamentals
 from app.models.match import (
     MatchEvent,
@@ -37,6 +39,7 @@ __all__ = [
     "MatchStatus",
     "MatchLlmAnalysis",
     "MatchLlmPlayRec",
+    "LlmRequestLog",
     "TeamMatchStat",
     "PlayerMatchPerformance",
     "OddsHistory",
