@@ -42,6 +42,21 @@ class TeamPlayerCountRead(BaseModel):
     player_count: int
 
 
+class TeamFundamentalsSyncResultRead(BaseModel):
+    """球队基本面同步结果。"""
+
+    league: LeagueRead
+    season: str = Field(description="基本面所属赛季,如 2026-2027")
+    team_count: int = Field(description="写入基本面数据的球队数")
+    created_count: int = Field(description="新建基本面数")
+    updated_count: int = Field(description="更新基本面数")
+    skipped_teams: list[str] = Field(
+        description="积分榜未覆盖的球队(如赛季初尚未开赛)"
+    )
+    uniform_league_id: int = Field(description="竞彩网统一联赛 ID")
+    source: str = Field(description="数据来源标识", default="sporttery")
+
+
 class PlayerSyncResultRead(BaseModel):
     """球员同步结果。"""
 

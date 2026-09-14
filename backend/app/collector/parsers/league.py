@@ -30,6 +30,8 @@ def find_league_item(
     """按名称从展平后的联赛列表中定位唯一条目。
 
     匹配优先级:简称精确相等 > 简称互相包含(如“甲”匹配“西甲”)。
+    同一联赛可能出现在多个分组(hot/normal 各一条,uniformLeagueId
+    相同),按 uniformLeagueId 去重后才判歧义。
 
     Args:
         items: ``fetch_league_list`` 返回的展平列表。
@@ -45,7 +47,9 @@ def find_league_item(
     if not name:
         raise DataValidationError("联赛名称不能为空")
 
-    exact = [it for it in items if it.get("leagueAbbCnName") == name]
+    exact = _dedupe(
+        it for it in items if it.get("leagueAbbCnName") == name
+    )
     if len(exact) == 1:
         return exact[0]
     if len(exact) > 1:
@@ -53,12 +57,12 @@ def find_league_item(
             f"联赛名称“{name}”匹配到多个条目,请使用更精确的名称"
         )
 
-    partial = [
+    partial = _dedupe(
         it
         for it in items
         if (abbr := str(it.get("leagueAbbCnName") or ""))
         and (name in abbr or abbr in name)
-    ]
+    )
     if len(partial) == 1:
         return partial[0]
     if len(partial) > 1:
@@ -67,6 +71,32 @@ def find_league_item(
             f"联赛名称“{name}”存在歧义,可选:{candidates}"
         )
     raise DataValidationError(f"未在竞彩网联赛资料中找到联赛“{name}”")
+
+
+def _dedupe(
+    items: typing.Iterable[dict[str, typing.Any]],
+) -> list[dict[str, typing.Any]]:
+    """按 uniformLeagueId 去重(无 ID 的条目按名称去重,均无则保留)。
+
+    竞彩网列表中同一联赛可能同时出现在 hot 与 normal 分组,
+    属同一实体,不应判为歧义。
+    """
+    seen_ids: set[int] = set()
+    seen_names: set[str] = set()
+    unique: list[dict[str, typing.Any]] = []
+    for item in items:
+        league_id = item.get("uniformLeagueId")
+        name = str(item.get("leagueAbbCnName") or "")
+        if league_id is not None:
+            if league_id in seen_ids:
+                continue
+            seen_ids.add(league_id)
+        elif name:
+            if name in seen_names:
+                continue
+            seen_names.add(name)
+        unique.append(item)
+    return unique
 
 
 def normalize_season(raw_season: str) -> str:

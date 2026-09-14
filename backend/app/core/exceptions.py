@@ -55,6 +55,27 @@ class ExternalSourceError(FortunePitchError):
         )
 
 
+class LlmNotConfiguredError(FortunePitchError):
+    """大模型服务未配置(缺少 API Key 或服务商名非法)。"""
+
+    def __init__(self, message: str = "大模型服务未配置,请在 .env 中填写 LLM API Key") -> None:
+        super().__init__(
+            message=message,
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+
+class LlmServiceError(FortunePitchError):
+    """大模型调用失败(网络超时、接口报错、输出无法解析)。"""
+
+    def __init__(self, message: str, detail: str | None = None) -> None:
+        super().__init__(
+            message=message,
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=detail,
+        )
+
+
 class UnauthorizedError(FortunePitchError):
     """API Key 校验失败。"""
 

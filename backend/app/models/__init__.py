@@ -8,10 +8,12 @@
 """
 
 from app.models.analytics import PlayerMatchPerformance, TeamMatchStat
-from app.models.base import League, Player, Team
+from app.models.base import League, Player, Team, TeamFundamentals
 from app.models.match import (
     MatchEvent,
     MatchGame,
+    MatchLlmAnalysis,
+    MatchLlmPlayRec,
     MatchOdds,
     MatchResult,
     MatchStatus,
@@ -27,11 +29,14 @@ __all__ = [
     "League",
     "Team",
     "Player",
+    "TeamFundamentals",
     "MatchGame",
     "MatchEvent",
     "MatchOdds",
     "MatchResult",
     "MatchStatus",
+    "MatchLlmAnalysis",
+    "MatchLlmPlayRec",
     "TeamMatchStat",
     "PlayerMatchPerformance",
     "OddsHistory",

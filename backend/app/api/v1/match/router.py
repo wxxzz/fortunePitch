@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.v1.match.schemas import (
+    LlmAnalysisRead,
     MatchEventCreate,
     MatchEventRead,
     MatchGameCreate,
@@ -20,7 +21,7 @@ from app.core.database import get_db_session
 from app.core.exceptions import DataValidationError, ResourceNotFoundError
 from app.core.security import verify_api_key
 from app.models import MatchEvent, MatchGame, MatchOdds, MatchStatus
-from app.services import crud
+from app.services import crud, llm
 
 router = APIRouter(prefix="/match", tags=["match"], dependencies=[Depends(verify_api_key)])
 
@@ -95,6 +96,65 @@ async def update_score(
 async def delete_game(match_id: str, session: AsyncSession = Depends(get_db_session)) -> None:
     """删除比赛。"""
     await crud.delete_entity(session, MatchGame, match_id)
+
+
+@router.post(
+    "/games/{match_id}/llm-analysis",
+    response_model=LlmAnalysisRead,
+    summary="大模型分析(分玩法推荐,生成后保存)",
+)
+async def analyze_game(
+    match_id: str, session: AsyncSession = Depends(get_db_session)
+) -> LlmAnalysisRead:
+    """调用大模型分析单场比赛并落库,输出各竞彩玩法的推荐方案。
+
+    服务端聚合联赛信息、双方基本面(积分榜)与在售玩法赔率后,
+    构造提示词调用 OpenAI 兼容接口;每次生成保存一条历史记录。
+    结果为数据分析参考,不构成投注建议。
+
+    Raises:
+        ResourceNotFoundError: 比赛不存在。
+        LlmNotConfiguredError: 未配置 LLM API Key(503)。
+        LlmServiceError: 大模型调用或输出解析失败(502)。
+    """
+    context = await llm.build_match_analysis_context(session, match_id)
+    analysis = await llm.analyze_match(context)
+    saved = await llm.save_analysis(session, analysis)
+    return LlmAnalysisRead.model_validate(saved)
+
+
+@router.get(
+    "/games/{match_id}/llm-analysis",
+    response_model=LlmAnalysisRead,
+    summary="查询最近一次已保存的大模型分析",
+)
+async def get_latest_llm_analysis(
+    match_id: str, session: AsyncSession = Depends(get_db_session)
+) -> LlmAnalysisRead:
+    """查询比赛最近一次已保存的大模型分析(含分玩法明细)。
+
+    Raises:
+        ResourceNotFoundError: 该比赛尚未生成过分析。
+    """
+    analysis = await llm.get_latest_analysis(session, match_id)
+    if analysis is None:
+        raise ResourceNotFoundError("大模型分析结果", match_id)
+    return LlmAnalysisRead.model_validate(analysis)
+
+
+@router.get(
+    "/games/{match_id}/llm-analyses",
+    response_model=list[LlmAnalysisRead],
+    summary="查询比赛的大模型分析历史",
+)
+async def list_llm_analyses(
+    match_id: str, session: AsyncSession = Depends(get_db_session)
+) -> list[LlmAnalysisRead]:
+    """查询比赛的历史分析列表,按生成时间倒序,最多返回最近 20 条。"""
+    return [
+        LlmAnalysisRead.model_validate(row)
+        for row in await llm.list_match_analyses(session, match_id)
+    ]
 
 
 # ---------- 赛果开奖 /results ----------

@@ -76,3 +76,45 @@ class PlayerRead(BaseModel):
     position: str | None
     birth_date: datetime.date | None
     market_value: float | None
+
+
+# ---------- 球队基本面 ----------
+
+class TeamFundamentalsRead(BaseModel):
+    """球队基本面响应模型(积分榜总/主/客三维度)。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    team_id: int
+    season: str
+    ranking: int | None
+    played: int | None
+    wins: int | None
+    draws: int | None
+    losses: int | None
+    goals_for: int | None
+    goals_against: int | None
+    goal_diff: int | None
+    points: int | None
+    win_rate: float | None
+    home_ranking: int | None
+    home_played: int | None
+    home_wins: int | None
+    home_draws: int | None
+    home_losses: int | None
+    home_goals_for: int | None
+    home_goals_against: int | None
+    home_goal_diff: int | None
+    home_points: int | None
+    home_win_rate: float | None
+    away_ranking: int | None
+    away_played: int | None
+    away_wins: int | None
+    away_draws: int | None
+    away_losses: int | None
+    away_goals_for: int | None
+    away_goals_against: int | None
+    away_goal_diff: int | None
+    away_points: int | None
+    away_win_rate: float | None
+    update_time: datetime.datetime

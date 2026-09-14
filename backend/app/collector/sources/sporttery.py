@@ -215,6 +215,58 @@ async def fetch_league_standings(season_id: int) -> list[dict[str, typing.Any]]:
     return rows
 
 
+async def fetch_league_fundamentals(
+    season_id: int,
+) -> dict[str, list[dict[str, typing.Any]]] | None:
+    """按赛季 ID 拉取球队基本面(积分榜总/主/客三榜)。
+
+    与 ``fetch_league_standings`` 同一接口,但保留 homeTables/awayTables
+    两个维度;杯赛可能包含多个阶段/小组,展平时按 ``uniformTeamId``
+    去重(总/主/客三榜各自独立去重)。
+
+    Args:
+        season_id: 赛季 ID(联赛列表接口 seasonList 中的 seasonId)。
+
+    Returns:
+        ``{"total": 行列表, "home": 行列表, "away": 行列表}``;
+        三榜均为空(赛季未开赛)时返回 None。行字段含
+        abbCnName/uniformTeamId/ranking/totalLegCnt/winGoalMatchCnt/
+        drawMatchCnt/lossGoalMatchCnt/goalCnt/lossGoalCnt/netGoal/
+        points/winProbability。
+
+    Raises:
+        ExternalSourceError: 网络失败或结构异常。
+    """
+    async with _client() as client:
+        payload = await _get_json(
+            client, _LEAGUE_TABLES_PATH, {"seasonId": season_id}
+        )
+    tables = _extract_value(payload, "球队基本面")
+    if not isinstance(tables, dict):
+        raise ExternalSourceError("球队基本面结构异常", detail="value 不是对象")
+    result: dict[str, list[dict[str, typing.Any]]] = {}
+    for view_name, view_key in (
+        ("total", "totalTables"),
+        ("home", "homeTables"),
+        ("away", "awayTables"),
+    ):
+        rows: list[dict[str, typing.Any]] = []
+        seen: set[int] = set()
+        for phase in tables.get(view_key) or []:
+            for group in phase.get("groups") or []:
+                for row in group.get("tables") or []:
+                    team_id = row.get("uniformTeamId")
+                    if team_id is not None and team_id in seen:
+                        continue
+                    if team_id is not None:
+                        seen.add(team_id)
+                    rows.append(row)
+        result[view_name] = rows
+    if not any(result.values()):
+        return None
+    return result
+
+
 async def fetch_team_infos(
     uniform_team_ids: list[int],
 ) -> list[dict[str, typing.Any]]:

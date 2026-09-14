@@ -9,11 +9,12 @@ from app.api.v1.base.schemas import (
     PlayerCreate,
     PlayerRead,
     TeamCreate,
+    TeamFundamentalsRead,
     TeamRead,
 )
 from app.core.database import get_db_session
 from app.core.security import verify_api_key
-from app.models import League, Player, Team
+from app.models import League, Player, Team, TeamFundamentals
 from app.services import crud
 
 router = APIRouter(prefix="/base", tags=["base"], dependencies=[Depends(verify_api_key)])
@@ -89,6 +90,17 @@ async def get_team(team_id: int, session: AsyncSession = Depends(get_db_session)
 async def delete_team(team_id: int, session: AsyncSession = Depends(get_db_session)) -> None:
     """删除球队。"""
     await crud.delete_entity(session, Team, team_id)
+
+
+@router.get("/teams/{team_id}/fundamentals", response_model=TeamFundamentalsRead)
+async def get_team_fundamentals(
+    team_id: int, session: AsyncSession = Depends(get_db_session)
+) -> TeamFundamentals:
+    """查询球队基本面(积分榜总/主/客三维度赛季战绩)。
+
+    数据由数据采集页“同步基本面”写入;未同步过基本面时返回 404。
+    """
+    return await crud.get_entity(session, TeamFundamentals, team_id)
 
 
 # ---------- 球员 /players ----------

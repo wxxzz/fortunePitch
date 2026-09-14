@@ -15,7 +15,10 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    Numeric,
     String,
+    Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -67,6 +70,9 @@ class MatchGame(Base):
     events: Mapped[list["MatchEvent"]] = relationship(back_populates="game")
     odds: Mapped["MatchOdds | None"] = relationship(back_populates="game")
     result: Mapped["MatchResult | None"] = relationship(back_populates="game")
+    llm_analyses: Mapped[list["MatchLlmAnalysis"]] = relationship(
+        back_populates="game"
+    )
 
 
 class MatchOdds(Base):
@@ -149,3 +155,66 @@ class MatchEvent(Base):
     is_home_team: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
     game: Mapped["MatchGame"] = relationship(back_populates="events")
+
+
+class MatchLlmAnalysis(Base):
+    """大模型分析结果表(fp_match_llm_analyses):每次生成一行,保留历史。
+
+    由深度分析页“AI 分析”生成后落库,记录整体研判与风险提示;
+    分玩法推荐明细另由 fp_match_llm_play_recs 承载。
+    """
+
+    __tablename__ = "fp_match_llm_analyses"
+
+    analysis_id: Mapped[int] = mapped_column(
+        BigIntPK, primary_key=True, autoincrement=True
+    )
+    match_id: Mapped[str] = mapped_column(
+        ForeignKey("fp_match_games.match_id"), index=True, nullable=False
+    )
+    # 服务商(qwen / ark)与实际使用的模型名,便于回溯不同模型的历史效果
+    provider: Mapped[str] = mapped_column(String(16), nullable=False)
+    model: Mapped[str] = mapped_column(String(64), nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    risks: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=datetime.datetime.now
+    )
+
+    game: Mapped["MatchGame"] = relationship(back_populates="llm_analyses")
+    # 级联删除:主表删除时明细随数据库外键 ON DELETE CASCADE 一并清除
+    plays: Mapped[list["MatchLlmPlayRec"]] = relationship(
+        back_populates="analysis", cascade="all, delete-orphan", passive_deletes=True
+    )
+
+
+class MatchLlmPlayRec(Base):
+    """大模型分玩法推荐明细表(fp_match_llm_play_recs)。
+
+    每种玩法一行,挂在某次分析下;(analysis_id, play_code) 唯一,
+    即同一次分析内每种竞彩玩法至多一条推荐。
+    """
+
+    __tablename__ = "fp_match_llm_play_recs"
+    __table_args__ = (
+        UniqueConstraint("analysis_id", "play_code", name="uk_llm_analysis_play"),
+    )
+
+    rec_id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
+    analysis_id: Mapped[int] = mapped_column(
+        ForeignKey("fp_match_llm_analyses.analysis_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # 玩法编码 HAD/HHAD/CRS/TTG/HAFU 与展示名
+    play_code: Mapped[str] = mapped_column(String(8), nullable=False)
+    play_name: Mapped[str] = mapped_column(String(16), nullable=False)
+    # 推荐选项展示名,如 主胜 / 1:2 / 3球 / 胜胜
+    recommendation: Mapped[str] = mapped_column(String(32), nullable=False)
+    # 置信度 0.000~1.000
+    confidence: Mapped[float] = mapped_column(Numeric(4, 3), nullable=False)
+    reasoning: Mapped[str] = mapped_column(String(500), nullable=False)
+    # 次选选项,最多 2 个
+    alternatives: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+
+    analysis: Mapped["MatchLlmAnalysis"] = relationship(back_populates="plays")

@@ -73,6 +73,36 @@ class MatchScoreUpdate(BaseModel):
     away_score: int = Field(ge=0)
 
 
+# ---------- 大模型分析 ----------
+
+class LlmPlayRecommendationRead(BaseModel):
+    """单种玩法推荐方案响应模型。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    play_code: str = Field(description="玩法编码:HAD/HHAD/CRS/TTG/HAFU")
+    play_name: str = Field(description="玩法展示名,如 胜平负")
+    recommendation: str = Field(description="推荐选项,如 主胜 / 1:2 / 3球 / 胜胜")
+    confidence: float = Field(ge=0.0, le=1.0, description="置信度,0~1")
+    reasoning: str = Field(description="推荐理由")
+    alternatives: list[str] = Field(default_factory=list, description="次选选项")
+
+
+class LlmAnalysisRead(BaseModel):
+    """大模型分析结果响应模型(整体研判 + 分玩法推荐 + 风险提示)。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    analysis_id: int = Field(description="分析记录 ID(落库主键)")
+    match_id: str
+    provider: str = Field(description="服务商:qwen / ark")
+    model: str = Field(description="实际使用的模型名")
+    summary: str = Field(description="整体研判")
+    plays: list[LlmPlayRecommendationRead] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list, description="风险提示")
+    created_at: datetime.datetime = Field(description="生成时间")
+
+
 # ---------- 赛果开奖 ----------
 
 class MatchResultRead(BaseModel):

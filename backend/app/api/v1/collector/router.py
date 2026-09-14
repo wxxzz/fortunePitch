@@ -12,10 +12,18 @@ from app.api.v1.collector.schemas import (
     PlayerSyncResultRead,
     ResultSyncRequest,
     ResultSyncResultRead,
+    TeamFundamentalsSyncResultRead,
     TeamPlayerCountRead,
     TeamSyncResultRead,
 )
-from app.collector.sync import league_sync, match_sync, player_sync, result_sync, team_sync
+from app.collector.sync import (
+    fundamental_sync,
+    league_sync,
+    match_sync,
+    player_sync,
+    result_sync,
+    team_sync,
+)
 from app.core.database import get_db_session
 from app.core.security import verify_api_key
 from app.models import League
@@ -97,6 +105,32 @@ async def sync_players(
             for name, count in result.team_player_counts
         ],
         skipped_teams=list(result.skipped_team_names),
+    )
+
+
+@router.post(
+    "/fundamentals/sync",
+    response_model=TeamFundamentalsSyncResultRead,
+    status_code=status.HTTP_200_OK,
+    summary="按联赛名称同步球队基本面",
+)
+async def sync_team_fundamentals(
+    payload: LeagueSyncRequest, session: AsyncSession = Depends(get_db_session)
+) -> TeamFundamentalsSyncResultRead:
+    """从竞彩网积分榜(总/主/客三榜)拉取指定联赛的球队基本面并入库。
+
+    会自动先同步联赛档案与球队清单;覆盖排名、场次、胜负平、
+    进失球、净胜球、积分与胜率。积分榜未覆盖的球队在结果中列出。
+    """
+    result = await fundamental_sync.sync_league_fundamentals(session, payload.league_name)
+    return TeamFundamentalsSyncResultRead(
+        league=LeagueRead.model_validate(result.league),
+        season=result.season,
+        team_count=result.team_count,
+        created_count=result.created_count,
+        updated_count=result.updated_count,
+        skipped_teams=list(result.skipped_team_names),
+        uniform_league_id=result.uniform_league_id,
     )
 
 

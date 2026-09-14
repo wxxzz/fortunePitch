@@ -137,6 +137,9 @@ async def _sync_match_odds(session: AsyncSession) -> int:
         # 下次同步自动补齐
         return 0
 
+    # 会话 autoflush=False,本同步新建的场次仍在 pending 状态,
+    # 不 flush 的话下面 existing_ids 查不到它们,当次赛程将永远错过赔率
+    await session.flush()
     existing_ids = set(
         await session.scalars(select(MatchGame.match_id))
     )
