@@ -9,6 +9,7 @@ from sqlalchemy.orm import selectinload
 
 from app.api.v1.match.schemas import (
     LlmAnalysisRead,
+    LlmFundamentalAnalysisRead,
     MatchEventCreate,
     MatchEventRead,
     MatchGameCreate,
@@ -21,7 +22,7 @@ from app.core.database import get_db_session
 from app.core.exceptions import DataValidationError, ResourceNotFoundError
 from app.core.security import verify_api_key
 from app.models import MatchEvent, MatchGame, MatchOdds, MatchStatus
-from app.services import crud, llm
+from app.services import crud, llm, llm_fundamental
 
 router = APIRouter(prefix="/match", tags=["match"], dependencies=[Depends(verify_api_key)])
 
@@ -162,6 +163,67 @@ async def list_llm_analyses(
     return [
         LlmAnalysisRead.model_validate(row)
         for row in await llm.list_match_analyses(session, match_id)
+    ]
+
+
+@router.post(
+    "/games/{match_id}/llm-fundamentals",
+    response_model=LlmFundamentalAnalysisRead,
+    summary="大模型基本面分析(多维度,生成后保存)",
+)
+async def analyze_game_fundamentals(
+    match_id: str, session: AsyncSession = Depends(get_db_session)
+) -> LlmFundamentalAnalysisRead:
+    """调用大模型做基本面多维度分析并落库:近期状态 / 主客场表现 / 攻防效率 /
+    战意与动机 / 历史交锋 / 其他相关因素。
+
+    服务端聚合球队档案、积分榜战绩、看板赛程赛果后构造提示词调用
+    OpenAI 兼容接口;调用过程写入请求日志表(fp_llm_request_logs),
+    每次生成保存一条历史记录(fp_match_llm_fund_analyses)。
+    结果为数据分析参考,不构成投注建议。
+
+    Raises:
+        ResourceNotFoundError: 比赛不存在。
+        LlmNotConfiguredError: 未配置 LLM API Key(503)。
+        LlmServiceError: 大模型调用或输出解析失败(502)。
+    """
+    context = await llm_fundamental.build_fundamental_context(session, match_id)
+    analysis = await llm_fundamental.analyze_fundamentals(context)
+    saved = await llm_fundamental.save_fundamental(session, analysis)
+    return LlmFundamentalAnalysisRead.model_validate(saved)
+
+
+@router.get(
+    "/games/{match_id}/llm-fundamentals",
+    response_model=LlmFundamentalAnalysisRead,
+    summary="查询最近一次已保存的大模型基本面分析",
+)
+async def get_latest_llm_fundamental(
+    match_id: str, session: AsyncSession = Depends(get_db_session)
+) -> LlmFundamentalAnalysisRead:
+    """查询比赛最近一次已保存的大模型基本面分析(含维度明细)。
+
+    Raises:
+        ResourceNotFoundError: 该比赛尚未生成过基本面分析。
+    """
+    analysis = await llm_fundamental.get_latest_fundamental(session, match_id)
+    if analysis is None:
+        raise ResourceNotFoundError("大模型基本面分析结果", match_id)
+    return LlmFundamentalAnalysisRead.model_validate(analysis)
+
+
+@router.get(
+    "/games/{match_id}/llm-fund-analyses",
+    response_model=list[LlmFundamentalAnalysisRead],
+    summary="查询比赛的大模型基本面分析历史",
+)
+async def list_llm_fundamentals(
+    match_id: str, session: AsyncSession = Depends(get_db_session)
+) -> list[LlmFundamentalAnalysisRead]:
+    """查询比赛的历史基本面分析列表,按生成时间倒序,最多返回最近 20 条。"""
+    return [
+        LlmFundamentalAnalysisRead.model_validate(row)
+        for row in await llm_fundamental.list_fundamentals(session, match_id)
     ]
 
 

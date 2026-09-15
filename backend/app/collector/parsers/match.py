@@ -86,7 +86,7 @@ def build_business_date(sub: dict[str, typing.Any]) -> datetime.date | None:
     value = str(sub.get("businessDate") or "").strip()
     if not value:
         return None
-    return _parse_date(value)
+    return datetime.date.fromisoformat(_parse_date(value))
 
 
 def build_match_time(sub: dict[str, typing.Any]) -> datetime.datetime:

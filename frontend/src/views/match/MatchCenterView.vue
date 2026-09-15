@@ -119,9 +119,9 @@ function handleConfirmSuccess(decisionCount: number): void {
         <label class="match-center__filter">
           <span>日期</span>
           <div class="match-center__date-range">
-            <input v-model="startDate" type="date" />
+            <input v-model="startBusinessDate" type="date" />
             <span class="match-center__date-sep">至</span>
-            <input v-model="endDate" type="date" />
+            <input v-model="endBusinessDate" type="date" />
           </div>
         </label>
         <label class="match-center__filter match-center__filter--check">

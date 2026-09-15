@@ -408,7 +408,7 @@ def _parse_analysis(content: str, context: MatchAnalysisContext) -> tuple[str, l
 
 async def _write_request_log(
     *,
-    context: MatchAnalysisContext,
+    match_id: str,
     provider: str,
     model: str,
     base_url: str,
@@ -421,11 +421,13 @@ async def _write_request_log(
 ) -> None:
     """落一条大模型请求日志(独立会话写入并提交)。
 
+    只依赖 match_id 字符串,不依赖具体分析上下文类型,
+    供分玩法推荐(llm)与基本面分析(llm_fundamental)共用。
     日志失败只记录 warning,绝不影响主流程 —— 请求日志的意义
     正是在业务请求失败(事务回滚)时也能留存调用痕迹。
     """
     log_row = LlmRequestLog(
-        match_id=context.match_id,
+        match_id=match_id,
         provider=provider,
         model=model,
         base_url=base_url,
@@ -462,7 +464,7 @@ async def analyze_match(context: MatchAnalysisContext) -> LlmAnalysis:
         "timeout_seconds": settings.LLM_TIMEOUT_SECONDS,
     }
     log_base = {
-        "context": context,
+        "match_id": context.match_id,
         "provider": provider,
         "model": model,
         "base_url": base_url,

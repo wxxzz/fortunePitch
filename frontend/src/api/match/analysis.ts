@@ -45,3 +45,45 @@ export async function getLlmAnalysis(matchId: string): Promise<LlmAnalysis> {
   )
   return data
 }
+
+/** 单个基本面维度的分析结论 */
+export interface LlmFundamentalDimension {
+  code: string
+  title: string
+  edge: 'home' | 'away' | 'even'
+  content: string
+}
+
+/** 大模型基本面分析结果(整体研判 + 六维度结论 + 风险提示) */
+export interface LlmFundamentalAnalysis {
+  analysis_id: number
+  match_id: string
+  provider: string
+  model: string
+  summary: string
+  dimensions: LlmFundamentalDimension[]
+  risks: string[]
+  created_at: string
+}
+
+/** 调用大模型做基本面多维度分析(近期状态/主客场/攻防/战意/交锋/其他),生成后保存 */
+export async function runLlmFundamentalAnalysis(
+  matchId: string,
+): Promise<LlmFundamentalAnalysis> {
+  const { data } = await request.post<LlmFundamentalAnalysis>(
+    `/api/v1/match/games/${matchId}/llm-fundamentals`,
+    undefined,
+    { timeout: LLM_TIMEOUT_MS },
+  )
+  return data
+}
+
+/** 查询比赛最近一次已保存的大模型基本面分析(未生成过时后端返回 404) */
+export async function getLlmFundamentalAnalysis(
+  matchId: string,
+): Promise<LlmFundamentalAnalysis> {
+  const { data } = await request.get<LlmFundamentalAnalysis>(
+    `/api/v1/match/games/${matchId}/llm-fundamentals`,
+  )
+  return data
+}
