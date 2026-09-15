@@ -6,7 +6,7 @@
 
 import datetime
 
-from sqlalchemy import Date, DateTime, ForeignKey, Integer, Numeric, String
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base, BigIntPK
@@ -50,6 +50,8 @@ class Team(Base):
     fundamentals: Mapped["TeamFundamentals | None"] = relationship(
         back_populates="team"
     )
+    profile: Mapped["TeamProfile | None"] = relationship(back_populates="team")
+    team_matches: Mapped[list["TeamMatch"]] = relationship(back_populates="team")
 
 
 class Player(Base):
@@ -125,3 +127,76 @@ class TeamFundamentals(Base):
     )
 
     team: Mapped["Team"] = relationship(back_populates="fundamentals")
+
+
+class TeamProfile(Base):
+    """竞彩网球队档案表(fp_base_team_profiles):球队看板数据源映射。
+
+    每队一行,由采集模块从竞彩网球队专栏(sporttery.cn/zqlszl/qdzl)
+    写入,维护本地球队与竞彩网统一球队 ID 的映射及名称/国家/队徽,
+    供球队看板同步与查询使用。
+    """
+
+    __tablename__ = "fp_base_team_profiles"
+
+    team_id: Mapped[int] = mapped_column(
+        ForeignKey("fp_base_teams.team_id", ondelete="CASCADE"), primary_key=True
+    )
+    # 竞彩网统一球队 ID(球队专栏页 URL 的 tid)
+    uniform_team_id: Mapped[int] = mapped_column(BigIntPK, unique=True, index=True)
+    # 竞彩网赛事库球队 ID / 外部数据源球队 ID
+    gm_team_id: Mapped[int | None] = mapped_column(BigIntPK)
+    wbsj_team_id: Mapped[int | None] = mapped_column(BigIntPK)
+    # 球队简称(竞彩网赛程赛果使用的队名)
+    abbrev_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    # 球队全称与所属国家
+    full_name: Mapped[str | None] = mapped_column(String(128))
+    country_name: Mapped[str | None] = mapped_column(String(64))
+    logo_url: Mapped[str | None] = mapped_column(String(512))
+    update_time: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=datetime.datetime.now
+    )
+
+    team: Mapped["Team"] = relationship(back_populates="profile")
+
+
+class TeamMatch(Base):
+    """球队看板赛程表(fp_base_team_matches):未来赛事与赛程赛果。
+
+    以看板球队视角存储竞彩网球队专栏的未来赛事与赛程赛果,
+    比分为空表示未开赛;同一场比赛在两支球队的看板中视角不同
+    (is_home / team_result),故按 (team_id, uniform_match_id) 复合主键。
+    """
+
+    __tablename__ = "fp_base_team_matches"
+
+    team_id: Mapped[int] = mapped_column(
+        ForeignKey("fp_base_teams.team_id", ondelete="CASCADE"), primary_key=True
+    )
+    uniform_match_id: Mapped[int] = mapped_column(BigIntPK, primary_key=True)
+    uniform_league_id: Mapped[int | None] = mapped_column(BigIntPK, index=True)
+    league_name: Mapped[str | None] = mapped_column(String(128))
+    match_time: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    # 轮次与阶段(如欧冠 League Stage)
+    gameweek: Mapped[str | None] = mapped_column(String(32))
+    phase_name: Mapped[str | None] = mapped_column(String(64))
+    home_team_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    away_team_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    uniform_home_team_id: Mapped[int | None] = mapped_column(BigIntPK)
+    uniform_away_team_id: Mapped[int | None] = mapped_column(BigIntPK)
+    # 看板球队是否为主队
+    is_home: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    # 半场/全场比分(未开赛为 NULL)
+    half_home_score: Mapped[int | None] = mapped_column(Integer)
+    half_away_score: Mapped[int | None] = mapped_column(Integer)
+    full_home_score: Mapped[int | None] = mapped_column(Integer)
+    full_away_score: Mapped[int | None] = mapped_column(Integer)
+    # 看板球队视角的比赛结果:W=胜 D=平 L=负(未开赛为 NULL)
+    team_result: Mapped[str | None] = mapped_column(String(1))
+    update_time: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=datetime.datetime.now
+    )
+
+    team: Mapped["Team"] = relationship(back_populates="team_matches")

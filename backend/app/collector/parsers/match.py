@@ -69,11 +69,24 @@ def build_match_fields(sub: dict[str, typing.Any]) -> dict[str, typing.Any]:
     return {
         "match_id": str(match_id),
         "match_time": build_match_time(sub),
+        "business_date": build_business_date(sub),
         "league_name": league_name,
         "home_team_name": home_name,
         "away_team_name": away_name,
         "match_status": map_match_status(sub.get("matchStatus")),
     }
+
+
+def build_business_date(sub: dict[str, typing.Any]) -> datetime.date | None:
+    """提取售卖日(businessDate),次日凌晨开赛的比赛归属前一售卖日。
+
+    Raises:
+        DataValidationError: 字段存在但格式非法。
+    """
+    value = str(sub.get("businessDate") or "").strip()
+    if not value:
+        return None
+    return _parse_date(value)
 
 
 def build_match_time(sub: dict[str, typing.Any]) -> datetime.datetime:

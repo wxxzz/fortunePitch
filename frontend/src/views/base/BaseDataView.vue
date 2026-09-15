@@ -125,6 +125,10 @@ function openTeam(league: number, team: number): void {
   navigateTo(league, team)
 }
 
+function openTeamDashboard(team: number): void {
+  void router.push(`/base/team-dashboard/${team}`)
+}
+
 // ---------- 生命周期与联动 ----------
 
 void baseStore.fetchAll()
@@ -354,13 +358,22 @@ function handleDeleteLeague(id: number): void {
                 <td>{{ team.manager ?? '-' }}</td>
                 <td>{{ team.formation ?? '-' }}</td>
                 <td>
-                  <button
-                    class="base-data__btn base-data__btn--team"
-                    type="button"
-                    @click="openTeam(team.league_id, team.team_id)"
-                  >
-                    查看球员
-                  </button>
+                  <div class="base-data__row-actions">
+                    <button
+                      class="base-data__btn base-data__btn--team"
+                      type="button"
+                      @click="openTeam(team.league_id, team.team_id)"
+                    >
+                      查看球员
+                    </button>
+                    <button
+                      class="base-data__btn base-data__btn--team"
+                      type="button"
+                      @click="openTeamDashboard(team.team_id)"
+                    >
+                      看板
+                    </button>
+                  </div>
                 </td>
               </tr>
               <tr v-if="currentTeams.length === 0">

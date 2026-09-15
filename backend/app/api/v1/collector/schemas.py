@@ -2,9 +2,9 @@
 
 import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
-from app.api.v1.base.schemas import LeagueRead
+from app.api.v1.base.schemas import LeagueRead, TeamRead
 
 
 class LeagueSyncRequest(BaseModel):
@@ -123,4 +123,44 @@ class ResultSyncResultRead(BaseModel):
     skipped_matches: list[str] = Field(
         description="场次未入库等原因被跳过的场次说明"
     )
+    source: str = Field(description="数据来源标识", default="sporttery")
+
+
+class TeamDashboardSyncRequest(BaseModel):
+    """同步请求体:按球队拉取竞彩网球队专栏数据。"""
+
+    team_id: int | None = Field(
+        default=None, description="本地球队 ID(需已同步球队档案映射)", examples=[3]
+    )
+    uniform_team_id: int | None = Field(
+        default=None,
+        description="竞彩网统一球队 ID(球队专栏页 URL 的 tid)",
+        examples=[220],
+    )
+    term_limits: int = Field(
+        default=20,
+        ge=1,
+        le=100,
+        description="赛程赛果拉取的近期完赛条数上限",
+    )
+
+    @model_validator(mode="after")
+    def check_exactly_one_id(self) -> "TeamDashboardSyncRequest":
+        """team_id 与 uniform_team_id 必须二选一。"""
+        if (self.team_id is None) == (self.uniform_team_id is None):
+            raise ValueError("team_id 与 uniform_team_id 必须二选一")
+        return self
+
+
+class TeamDashboardSyncResultRead(BaseModel):
+    """球队看板同步结果。"""
+
+    team: TeamRead = Field(description="同步的本地球队")
+    uniform_team_id: int = Field(description="竞彩网统一球队 ID")
+    profile_created: bool = Field(description="是否新建了竞彩网档案映射")
+    future_count: int = Field(description="本次拉取的未来赛事条数")
+    result_count: int = Field(description="本次拉取的赛程赛果条数")
+    created_count: int = Field(description="新建看板比赛数")
+    updated_count: int = Field(description="更新看板比赛数")
+    pruned_count: int = Field(description="修剪的失效未开赛行数")
     source: str = Field(description="数据来源标识", default="sporttery")

@@ -19,6 +19,10 @@ _LEAGUE_DETAIL_PATH = "/gateway/uniform/football/league/getLeagueV1.qry"
 _LEAGUE_TABLES_PATH = "/gateway/uniform/football/league/getTablesV2.qry"
 _LEAGUE_MATCHES_PATH = "/gateway/uniform/football/league/getMatchResultV1.qry"
 _TEAM_INFO_PATH = "/gateway/uniform/football/team/getTeamInfoV1.qry"
+# 球队专栏(https://www.sporttery.cn/zqlszl/qdzl/?tid=)三个数据接口
+_TEAM_FUTURE_MATCHES_PATH = "/gateway/uniform/football/team/getFutureMatchesV1.qry"
+_TEAM_LEAGUE_LIST_PATH = "/gateway/uniform/football/team/getTeamLeagueListV1.qry"
+_TEAM_MATCH_RESULT_PATH = "/gateway/uniform/football/team/getMatchResultV1.qry"
 _MATCH_PLAYERS_PATH = "/gateway/uniform/football/getMatchPlayerV1.qry"
 _MATCH_DAY_LIST_PATH = "/gateway/uniform/football/getMatchListV1.qry"
 # 混合过关计算器接口(全部 5 种玩法赔率;matchId 与在售赛程一致)
@@ -284,12 +288,148 @@ async def fetch_team_infos(
     results: list[dict[str, typing.Any]] = []
     async with _client() as client:
         for team_id in uniform_team_ids:
-            payload = await _get_json(
-                client, _TEAM_INFO_PATH, {"uniformTeamId": team_id}
-            )
+            try:
+                payload = await _get_json(
+                    client, _TEAM_INFO_PATH, {"uniformTeamId": team_id}
+                )
+            except ExternalSourceError:
+                # 单支球队接口失败不拖垮整批,与 docstring 承诺一致
+                results.append({})
+                continue
             value = payload.get("value")
             results.append(value if isinstance(value, dict) else {})
     return results
+
+
+def _check_payload(payload: dict[str, typing.Any], api_name: str) -> typing.Any:
+    """校验网关响应结构并提取 value 字段(允许空数据)。
+
+    与 ``_extract_value`` 的区别:球队专栏接口在无数据(如无未来
+    赛事)时返回空 value,属于正常业务形态,不视为错误。
+
+    Raises:
+        ExternalSourceError: errorCode 非 0 或结构缺失。
+    """
+    if not isinstance(payload, dict):
+        raise ExternalSourceError(f"{api_name}响应结构异常", detail="顶层不是对象")
+    error_code = str(payload.get("errorCode", ""))
+    if error_code != "0":
+        raise ExternalSourceError(
+            f"{api_name}接口返回错误",
+            detail=f"errorCode={error_code}, message={payload.get('errorMessage')}",
+        )
+    return payload.get("value")
+
+
+async def fetch_team_future_matches(
+    uniform_team_id: int,
+) -> list[dict[str, typing.Any]]:
+    """拉取球队未来赛事(球队专栏页数据)。
+
+    对应页面 https://www.sporttery.cn/zqlszl/qdzl/?tid= ,条目含
+    matchDateTime/gameweek/phaseName/联赛与主客队信息/uniformMatchId。
+
+    Args:
+        uniform_team_id: 竞彩网统一球队 ID(球队专栏页 URL 的 tid)。
+
+    Returns:
+        按开赛时间升序排列的未来赛事列表,无未来赛事时为空列表。
+
+    Raises:
+        ExternalSourceError: 网络失败或结构异常。
+    """
+    try:
+        async with _client() as client:
+            payload = await _get_json(
+                client,
+                _TEAM_FUTURE_MATCHES_PATH,
+                {"uniformTeamId": uniform_team_id},
+            )
+    except ExternalSourceError as exc:
+        raise ExternalSourceError(
+            f"球队未来赛事拉取失败(uniformTeamId={uniform_team_id})",
+            detail=exc.detail,
+        ) from exc
+
+    value = _check_payload(payload, "球队未来赛事")
+    rows = value if isinstance(value, list) else []
+    rows.sort(key=lambda m: str(m.get("matchDateTime", "")))
+    return rows
+
+
+async def fetch_team_league_list(
+    uniform_team_id: int,
+) -> list[dict[str, typing.Any]]:
+    """拉取球队赛程赛果可选的参赛联赛列表(球队专栏页数据)。
+
+    Args:
+        uniform_team_id: 竞彩网统一球队 ID。
+
+    Returns:
+        参赛联赛列表(leagueAbbCnName/uniformLeagueId),无数据时为空列表。
+
+    Raises:
+        ExternalSourceError: 网络失败或结构异常。
+    """
+    try:
+        async with _client() as client:
+            payload = await _get_json(
+                client,
+                _TEAM_LEAGUE_LIST_PATH,
+                {"uniformTeamId": uniform_team_id},
+            )
+    except ExternalSourceError as exc:
+        raise ExternalSourceError(
+            f"球队参赛联赛拉取失败(uniformTeamId={uniform_team_id})",
+            detail=exc.detail,
+        ) from exc
+
+    value = _check_payload(payload, "球队参赛联赛")
+    return value if isinstance(value, list) else []
+
+
+async def fetch_team_match_results(
+    uniform_team_id: int,
+    uniform_league_ids: list[int] | None = None,
+    home_away_flag: str | None = None,
+    term_limits: int = 20,
+) -> dict[str, typing.Any]:
+    """拉取球队赛程赛果(球队专栏页数据)。
+
+    Args:
+        uniform_team_id: 竞彩网统一球队 ID。
+        uniform_league_ids: 参赛联赛 ID 列表(逗号拼接后过滤),
+            None 表示全部联赛。
+        home_away_flag: 主客过滤,``home``/``away``/None(全部)。
+        term_limits: 返回的近期完赛条数上限(接口默认 10,最大 100)。
+
+    Returns:
+        接口 value:含 ``matchList``(matchDate/sectionsNo1 半场比分/
+        sectionsNo999 全场比分/主客队名与 uniform ID)与 ``statistics``
+        战绩统计块,无数据时为空字典。
+
+    Raises:
+        ExternalSourceError: 网络失败或结构异常。
+    """
+    params: dict[str, typing.Any] = {
+        "uniformTeamId": uniform_team_id,
+        "termLimits": term_limits,
+    }
+    if uniform_league_ids:
+        params["uniformLeagueId"] = ",".join(str(i) for i in uniform_league_ids)
+    if home_away_flag:
+        params["homeAwayFlag"] = home_away_flag
+    try:
+        async with _client() as client:
+            payload = await _get_json(client, _TEAM_MATCH_RESULT_PATH, params)
+    except ExternalSourceError as exc:
+        raise ExternalSourceError(
+            f"球队赛程赛果拉取失败(uniformTeamId={uniform_team_id})",
+            detail=exc.detail,
+        ) from exc
+
+    value = _check_payload(payload, "球队赛程赛果")
+    return value if isinstance(value, dict) else {}
 
 
 async def fetch_season_matches(

@@ -10,7 +10,14 @@
 
 from app.models.analytics import PlayerMatchPerformance, TeamMatchStat
 from app.models.llm import LlmRequestLog
-from app.models.base import League, Player, Team, TeamFundamentals
+from app.models.base import (
+    League,
+    Player,
+    Team,
+    TeamFundamentals,
+    TeamMatch,
+    TeamProfile,
+)
 from app.models.match import (
     MatchEvent,
     MatchGame,
@@ -32,6 +39,8 @@ __all__ = [
     "Team",
     "Player",
     "TeamFundamentals",
+    "TeamProfile",
+    "TeamMatch",
     "MatchGame",
     "MatchEvent",
     "MatchOdds",

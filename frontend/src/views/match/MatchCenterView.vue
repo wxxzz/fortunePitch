@@ -4,7 +4,7 @@
  * 顶部筛选区 + 赛事玩法赔率卡片流(MatchOddsCard)
  * + 右侧边栏(今日焦点推荐)+ 底部选注栏与投注确认弹窗。
  */
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { useMatchStore } from '@/stores/match'
@@ -29,23 +29,14 @@ onMounted(() => {
 // ---------- 筛选区 ----------
 
 const selectedLeagueId = ref<number | null>(null)
-// 默认筛选当天及次日(本地时区),可通过日期控件清空查看全部
-const startDate = ref<string>(formatLocalDate(new Date()))
-const endDate = ref<string>(formatLocalDate(addDays(new Date(), 1)))
+// 使用 store 中已经定义好的售卖日范围，后端已经按售卖日过滤，前端不需要再重复过滤日期
+const { startBusinessDate, endBusinessDate } = matchStore
 const isTopFiveOnly = ref(false)
 
-/** 本地时区的 YYYY-MM-DD(toISOString 会偏移到 UTC,凌晨场次会算错日) */
-function formatLocalDate(date: Date): string {
-  const pad = (n: number): string => String(n).padStart(2, '0')
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
-}
-
-/** 加 n 天(保持本地时区) */
-function addDays(date: Date, days: number): Date {
-  const result = new Date(date)
-  result.setDate(result.getDate() + days)
-  return result
-}
+// 售卖日范围变化时重新拉取数据
+watch([startBusinessDate, endBusinessDate], () => {
+  void matchStore.fetchGames()
+})
 
 /** 五大联赛关键字(数据源筛选:仅看五大联赛) */
 const TOP_FIVE_KEYWORDS = ['英超', '西甲', '意甲', '德甲', '法甲']
@@ -65,15 +56,6 @@ const filteredGames = computed(() =>
     if (selectedLeagueId.value !== null) {
       const homeLeague = teamLeagueName.value.get(game.home_team_id)
       if (homeLeague !== leagues.value.find((l) => l.league_id === selectedLeagueId.value)?.league_name) {
-        return false
-      }
-    }
-    if (startDate.value || endDate.value) {
-      const gameDate = formatLocalDate(new Date(game.match_time))
-      if (startDate.value && gameDate < startDate.value) {
-        return false
-      }
-      if (endDate.value && gameDate > endDate.value) {
         return false
       }
     }

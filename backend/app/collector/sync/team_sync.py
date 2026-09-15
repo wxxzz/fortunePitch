@@ -6,6 +6,8 @@
 提取)-> 逐队拉取详情补全名称 -> 按 (league_id, team_name) 幂等 upsert。
 
 竞彩网不提供主场/主教练/阵型数据,相应字段保持为空。
+球队详情同时写入竞彩网档案映射(fp_base_team_profiles),
+供球队看板同步按 uniform_team_id 定位球队。
 """
 
 import typing
@@ -17,6 +19,7 @@ from app.collector.parsers import league as league_parser
 from app.collector.parsers import team as team_parser
 from app.collector.sources import sporttery
 from app.collector.sync import league_sync
+from app.collector.sync import team_dashboard_sync
 from app.core.exceptions import DataValidationError, ExternalSourceError
 from app.models import League, Team
 
@@ -185,6 +188,9 @@ async def sync_teams_for_league(
             created_count += 1
         else:
             updated_count += 1
+        # 球队详情写入竞彩网档案映射,供球队看板同步定位
+        if info:
+            await team_dashboard_sync.upsert_team_profile(session, team, info)
         teams.append(team)
         uniform_team_map[int(row["uniformTeamId"])] = team
 

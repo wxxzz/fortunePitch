@@ -174,11 +174,20 @@ class TestParsers:
         assert fields == {
             "match_id": "2041030",
             "match_time": datetime.datetime(2026, 8, 25, 1, 30),
+            # 次日凌晨开赛,售卖日仍是前一天
+            "business_date": datetime.date(2026, 8, 24),
             "league_name": "西班牙甲级联赛",
             "home_team_name": "巴塞罗那",
             "away_team_name": "桑坦德竞技",
             "match_status": MatchStatus.PENDING,
         }
+
+    def test_build_business_date_missing(self) -> None:
+        assert match_parser.build_business_date({"matchId": 1}) is None
+
+    def test_build_business_date_rejects_bad_format(self) -> None:
+        with pytest.raises(Exception):
+            match_parser.build_business_date({"businessDate": "2026/08/24"})
 
     def test_build_match_fields_requires_names(self) -> None:
         with pytest.raises(Exception):
@@ -316,6 +325,12 @@ class TestMatchSync:
             assert game.match_status == MatchStatus.PENDING
             assert game.match_time == datetime.datetime(2026, 8, 24, 20, 0)
             assert game.home_score is None
+            # 售卖日落库:次日凌晨开赛的 2041030 仍归属 8-24 售卖日
+            assert game.business_date == datetime.date(2026, 8, 24)
+            late_game = await session.get(MatchGame, "2041030")
+            assert late_game is not None
+            assert late_game.match_time == datetime.datetime(2026, 8, 25, 1, 30)
+            assert late_game.business_date == datetime.date(2026, 8, 24)
 
     async def test_sync_is_idempotent_and_keeps_scores(
         self, session_factory: async_sessionmaker
@@ -470,6 +485,33 @@ class TestSyncAPI:
         assert with_odds["odds"]["pools"][1]["goalLine"] == "-1"
         # 未同步赔率的场次 odds 为空
         assert by_id["2041030"]["odds"] is None
+
+    async def test_list_games_filters_by_business_date(
+        self, client: AsyncClient
+    ) -> None:
+        await client.post(
+            "/api/v1/collector/matches/sync",
+            json={"date": "2026-08-24"},
+            headers=HEADERS,
+        )
+        # 售卖日范围过滤:8-24 当天(含次日凌晨场 2041030)
+        response = await client.get(
+            "/api/v1/match/games",
+            params={"start_date": "2026-08-24", "end_date": "2026-08-24"},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200
+        assert sorted(g["match_id"] for g in response.json()) == [
+            "2041028", "2041030",
+        ]
+        assert all(g["business_date"] == "2026-08-24" for g in response.json())
+        # 范围之外返回空
+        response = await client.get(
+            "/api/v1/match/games",
+            params={"start_date": "2026-08-25"},
+            headers=HEADERS,
+        )
+        assert response.json() == []
 
     async def test_sync_matches_rejects_bad_date(self, client: AsyncClient) -> None:
         response = await client.post(

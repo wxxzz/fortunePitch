@@ -20,6 +20,11 @@ const NAV_ITEMS = [
 
 const activeRoute = computed(() => route.path)
 
+/** 前缀匹配:子页面(如 /base/team-dashboard/:id)下保持父项高亮 */
+function isActive(itemRoute: string): boolean {
+  return activeRoute.value === itemRoute || activeRoute.value.startsWith(`${itemRoute}/`)
+}
+
 function handleNavigate(path: string): void {
   void router.push(path)
 }
@@ -41,7 +46,7 @@ function handleNavigate(path: string): void {
         :key="item.route"
         type="button"
         class="app-sidebar__item"
-        :class="{ 'app-sidebar__item--active': activeRoute === item.route }"
+        :class="{ 'app-sidebar__item--active': isActive(item.route) }"
         @click="handleNavigate(item.route)"
       >
         <span class="app-sidebar__icon">{{ item.icon }}</span>

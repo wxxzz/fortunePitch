@@ -3,7 +3,7 @@
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.v1.base.schemas import LeagueRead
+from app.api.v1.base.schemas import LeagueRead, TeamRead
 from app.api.v1.collector.schemas import (
     LeagueSyncRequest,
     LeagueSyncResultRead,
@@ -12,6 +12,8 @@ from app.api.v1.collector.schemas import (
     PlayerSyncResultRead,
     ResultSyncRequest,
     ResultSyncResultRead,
+    TeamDashboardSyncRequest,
+    TeamDashboardSyncResultRead,
     TeamFundamentalsSyncResultRead,
     TeamPlayerCountRead,
     TeamSyncResultRead,
@@ -22,6 +24,7 @@ from app.collector.sync import (
     match_sync,
     player_sync,
     result_sync,
+    team_dashboard_sync,
     team_sync,
 )
 from app.core.database import get_db_session
@@ -157,6 +160,40 @@ async def sync_matches(
         odds_count=result.odds_count,
         skipped_leagues=result.skipped_league_names,
         skipped_matches=result.skipped_matches,
+    )
+
+
+@router.post(
+    "/team-dashboard/sync",
+    response_model=TeamDashboardSyncResultRead,
+    status_code=status.HTTP_200_OK,
+    summary="按球队同步球队看板数据",
+)
+async def sync_team_dashboard(
+    payload: TeamDashboardSyncRequest,
+    session: AsyncSession = Depends(get_db_session),
+) -> TeamDashboardSyncResultRead:
+    """从竞彩网球队专栏拉取球队未来赛事与赛程赛果并入库。
+
+    数据来源:https://www.sporttery.cn/zqlszl/qdzl/ (tid=竞彩网统一球队 ID)。
+    team_id 与 uniform_team_id 二选一;按 team_id 同步需先同步球队清单
+    (建立竞彩网档案映射),重复同步幂等更新并修剪失效未开赛行。
+    """
+    result = await team_dashboard_sync.sync_team_dashboard(
+        session,
+        team_id=payload.team_id,
+        uniform_team_id=payload.uniform_team_id,
+        term_limits=payload.term_limits,
+    )
+    return TeamDashboardSyncResultRead(
+        team=TeamRead.model_validate(result.team),
+        uniform_team_id=result.uniform_team_id,
+        profile_created=result.profile_created,
+        future_count=result.future_count,
+        result_count=result.result_count,
+        created_count=result.created_count,
+        updated_count=result.updated_count,
+        pruned_count=result.pruned_count,
     )
 
 

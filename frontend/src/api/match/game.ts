@@ -60,8 +60,13 @@ export interface ScoreUpdateParams {
   away_score: number
 }
 
-/** 分页查询比赛列表 */
-export async function listGames(params: { offset?: number; limit?: number } = {}): Promise<MatchGame[]> {
+/** 分页查询比赛列表,支持按售卖日范围过滤 */
+export async function listGames(params: {
+  offset?: number
+  limit?: number
+  start_date?: string
+  end_date?: string
+} = {}): Promise<MatchGame[]> {
   const { data } = await request.get<MatchGame[]>('/api/v1/match/games', { params })
   return data
 }

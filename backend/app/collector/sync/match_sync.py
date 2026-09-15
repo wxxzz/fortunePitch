@@ -98,13 +98,15 @@ async def sync_matches_by_date(session: AsyncSession, date: str) -> MatchSyncRes
                 home_team_id=home_team.team_id,
                 away_team_id=away_team.team_id,
                 match_time=fields["match_time"],
+                business_date=fields["business_date"],
                 match_status=MatchStatus.PENDING,
             )
             session.add(game)
             created_count += 1
         else:
-            # 只刷新开赛时间;状态与比分由赛果数据维护,不做降级
+            # 只刷新开赛时间与售卖日;状态与比分由赛果数据维护,不做降级
             game.match_time = fields["match_time"]
+            game.business_date = fields["business_date"]
             updated_count += 1
 
     odds_count = await _sync_match_odds(session)

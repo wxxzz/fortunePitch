@@ -13,6 +13,11 @@ const router = createRouter({
       component: () => import('@/views/base/BaseDataView.vue'),
     },
     {
+      path: '/base/team-dashboard/:teamId',
+      name: 'team-dashboard',
+      component: () => import('@/views/base/TeamDashboardView.vue'),
+    },
+    {
       path: '/collector',
       name: 'collector',
       component: () => import('@/views/collector/CollectorView.vue'),

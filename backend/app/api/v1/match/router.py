@@ -49,16 +49,24 @@ async def create_game(
 async def list_games(
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=20, ge=1, le=100),
+    start_date: datetime.date | None = Query(
+        default=None, description="售卖日起(含),格式 YYYY-MM-DD"
+    ),
+    end_date: datetime.date | None = Query(
+        default=None, description="售卖日止(含),格式 YYYY-MM-DD"
+    ),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[MatchGame]:
-    """分页查询比赛列表(含在售玩法赔率)。"""
-    stmt = (
-        select(MatchGame)
-        .options(selectinload(MatchGame.odds))
-        .order_by(MatchGame.match_time)
-        .offset(offset)
-        .limit(limit)
-    )
+    """分页查询比赛列表(含在售玩法赔率),支持按售卖日范围过滤。
+
+    售卖日与竞彩官网日期一致:次日凌晨开赛的比赛归属前一售卖日。
+    """
+    stmt = select(MatchGame).options(selectinload(MatchGame.odds))
+    if start_date is not None:
+        stmt = stmt.where(MatchGame.business_date >= start_date)
+    if end_date is not None:
+        stmt = stmt.where(MatchGame.business_date <= end_date)
+    stmt = stmt.order_by(MatchGame.match_time).offset(offset).limit(limit)
     result = await session.execute(stmt)
     return list(result.scalars().all())
 

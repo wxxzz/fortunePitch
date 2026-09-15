@@ -10,6 +10,7 @@ import typing
 from sqlalchemy import (
     JSON,
     Boolean,
+    Date,
     DateTime,
     Enum,
     Float,
@@ -54,6 +55,10 @@ class MatchGame(Base):
     referee_id: Mapped[int | None] = mapped_column(BigIntPK, nullable=True)
     match_time: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
+    )
+    # 竞彩售卖日:次日凌晨开赛的比赛归属前一售卖日(与竞彩官网日期一致)
+    business_date: Mapped[datetime.date | None] = mapped_column(
+        Date, nullable=True, index=True
     )
     match_status: Mapped[MatchStatus] = mapped_column(
         Enum(MatchStatus, native_enum=True),

@@ -18,6 +18,9 @@ class MatchGameCreate(BaseModel):
     away_team_id: int
     referee_id: int | None = None
     match_time: datetime.datetime
+    business_date: datetime.date | None = Field(
+        default=None, description="竞彩售卖日(次日凌晨开赛归属前一售卖日)"
+    )
     match_status: MatchStatus = MatchStatus.PENDING
     home_score: int | None = Field(default=None, ge=0)
     away_score: int | None = Field(default=None, ge=0)
@@ -59,6 +62,7 @@ class MatchGameRead(BaseModel):
     away_team_id: int
     referee_id: int | None
     match_time: datetime.datetime
+    business_date: datetime.date | None
     match_status: MatchStatus
     home_score: int | None
     away_score: int | None
