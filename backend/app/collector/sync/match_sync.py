@@ -3,12 +3,15 @@
 流程:拉取在售赛程 -> 按售卖日过滤 -> 逐场解析 ->
 联赛/球队须已在基础档案中(联赛或球队缺失的场次跳过并在结果中
 说明,需先在数据采集页同步对应联赛)-> 按 match_id 幂等 upsert ->
-拉取 5 种玩法赔率并幂等写入 fp_match_odds(仅覆盖已入库场次)。
+拉取 5 种玩法赔率并幂等写入 fp_match_odds(仅覆盖已入库场次),
+赔率发生变化时另追加一条快照到 fp_match_odds_snapshots(未变不落,
+避免走势出现重复噪音点)。
 
 已入库场次只刷新开赛时间,不改写状态与比分,避免赛果数据被
 未开赛状态覆盖。
 """
 
+import datetime
 import typing
 
 from sqlalchemy import select
@@ -18,7 +21,14 @@ from app.collector.parsers import match as match_parser
 from app.collector.parsers import odds as odds_parser
 from app.collector.sources import sporttery
 from app.core.exceptions import ExternalSourceError
-from app.models import League, MatchGame, MatchOdds, MatchStatus, Team
+from app.models import (
+    League,
+    MatchGame,
+    MatchOdds,
+    MatchOddsSnapshot,
+    MatchStatus,
+    Team,
+)
 
 
 class MatchSyncResult(typing.NamedTuple):
@@ -31,6 +41,8 @@ class MatchSyncResult(typing.NamedTuple):
     updated_count: int
     # 本次写入/刷新玩法赔率的场次数
     odds_count: int
+    # 本次因赔率变化而新增的赔率快照条数
+    odds_snapshot_count: int
     # 联赛未入库而被跳过的联赛名称(去重)
     skipped_league_names: list[str]
     # 球队未入库等原因被跳过的场次描述,如“周一004 奥萨苏纳 vs 莱万特”
@@ -109,7 +121,7 @@ async def sync_matches_by_date(session: AsyncSession, date: str) -> MatchSyncRes
             game.business_date = fields["business_date"]
             updated_count += 1
 
-    odds_count = await _sync_match_odds(session)
+    odds_count, snapshot_count = await _sync_match_odds(session)
 
     await session.flush()
     return MatchSyncResult(
@@ -118,26 +130,30 @@ async def sync_matches_by_date(session: AsyncSession, date: str) -> MatchSyncRes
         created_count=created_count,
         updated_count=updated_count,
         odds_count=odds_count,
+        odds_snapshot_count=snapshot_count,
         skipped_league_names=skipped_league_names,
         skipped_matches=skipped_matches,
     )
 
 
-async def _sync_match_odds(session: AsyncSession) -> int:
+async def _sync_match_odds(session: AsyncSession) -> tuple[int, int]:
     """拉取全部在售玩法赔率,幂等写入已入库场次的 fp_match_odds。
 
     计算器接口覆盖全部在售日,未入库场次跳过(避免外键错误);
-    已有赔率记录时原地刷新玩法与更新时间。
+    已有赔率记录时原地刷新玩法与更新时间。首次写入或赔率相对上次
+    发生变化时,另向 fp_match_odds_snapshots 追加一条完整快照
+    (赔率未变不落快照,避免走势出现重复点)。
 
     Returns:
-        写入/刷新赔率的场次数(外部接口失败时为 0,不影响赛程同步)。
+        (写入/刷新赔率的场次数, 新增快照条数)。
+        外部接口失败时为 (0, 0),不影响赛程同步。
     """
     try:
         odds_items = await sporttery.fetch_match_odds()
     except ExternalSourceError:
         # 赔率拉取失败不阻断赛程同步(结果中 odds_count=0),
         # 下次同步自动补齐
-        return 0
+        return 0, 0
 
     # 会话 autoflush=False,本同步新建的场次仍在 pending 状态,
     # 不 flush 的话下面 existing_ids 查不到它们,当次赛程将永远错过赔率
@@ -145,7 +161,8 @@ async def _sync_match_odds(session: AsyncSession) -> int:
     existing_ids = set(
         await session.scalars(select(MatchGame.match_id))
     )
-    count = 0
+    odds_count = 0
+    snapshot_count = 0
     for item in odds_items:
         fields = odds_parser.build_odds_record(item)
         if fields is None or fields["match_id"] not in existing_ids:
@@ -153,10 +170,16 @@ async def _sync_match_odds(session: AsyncSession) -> int:
         record = await session.get(MatchOdds, fields["match_id"])
         if record is None:
             session.add(MatchOdds(**fields))
-        else:
+            session.add(MatchOddsSnapshot(match_id=fields["match_id"], pools=fields["pools"]))
+            snapshot_count += 1
+        elif record.pools != fields["pools"]:
             record.pools = fields["pools"]
-        count += 1
-    return count
+            # default 仅在插入时生效,更新时须显式刷新(与模型 default 同口径)
+            record.update_time = datetime.datetime.now()
+            session.add(MatchOddsSnapshot(match_id=fields["match_id"], pools=fields["pools"]))
+            snapshot_count += 1
+        odds_count += 1
+    return odds_count, snapshot_count
 
 
 async def _load_league_map(session: AsyncSession) -> dict[str, League]:

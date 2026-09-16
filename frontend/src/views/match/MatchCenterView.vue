@@ -16,7 +16,7 @@ import BetConfirmModal from '@/components/match/BetConfirmModal.vue'
 
 const router = useRouter()
 const matchStore = useMatchStore()
-const { games, isLoading, error } = storeToRefs(matchStore)
+const { games, isLoading, error, startBusinessDate, endBusinessDate } = storeToRefs(matchStore)
 
 const baseStore = useBaseStore()
 const { leagues, teams } = storeToRefs(baseStore)
@@ -30,7 +30,6 @@ onMounted(() => {
 
 const selectedLeagueId = ref<number | null>(null)
 // 使用 store 中已经定义好的售卖日范围，后端已经按售卖日过滤，前端不需要再重复过滤日期
-const { startBusinessDate, endBusinessDate } = matchStore
 const isTopFiveOnly = ref(false)
 
 // 售卖日范围变化时重新拉取数据
@@ -42,10 +41,11 @@ watch([startBusinessDate, endBusinessDate], () => {
 const TOP_FIVE_KEYWORDS = ['英超', '西甲', '意甲', '德甲', '法甲']
 
 const teamLeagueName = computed(() => {
+  // Build league map first for O(1) lookups
+  const leagueById = new Map<number, string>(leagues.value.map((lg: { league_id: number; league_name: string }) => [lg.league_id, lg.league_name]))
   const map = new Map<number, string>()
   for (const team of teams.value) {
-    const league = leagues.value.find((l) => l.league_id === team.league_id)
-    map.set(team.team_id, league?.league_name ?? '')
+    map.set(team.team_id, leagueById.get(team.league_id) ?? '')
   }
   return map
 })

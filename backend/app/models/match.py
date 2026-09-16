@@ -15,6 +15,7 @@ from sqlalchemy import (
     Enum,
     Float,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
@@ -86,7 +87,7 @@ class MatchOdds(Base):
     每场比赛一行,``pools`` 为归一化玩法列表(由采集模块写入):
     ``[{"poolCode": "HAD", "playName": "胜平负", "goalLine": "-1",
     "options": [{"code": "h", "label": "主胜", "odds": 2.15}, ...]}, ...]``。
-    历史赔率轨迹另由 fp_strategy_odds_history 承载。
+    历史赔率轨迹另由 fp_match_odds_snapshots 承载。
     """
 
     __tablename__ = "fp_match_odds"
@@ -100,6 +101,29 @@ class MatchOdds(Base):
     )
 
     game: Mapped["MatchGame"] = relationship(back_populates="odds")
+
+
+class MatchOddsSnapshot(Base):
+    """比赛赔率快照表(fp_match_odds_snapshots):采集同步留存的赔率历史。
+
+    每次赛事同步时,若某场玩法赔率相对上一次发生变化,则追加一条完整
+    快照(``pools`` 结构与 :class:`MatchOdds` 一致);赔率未变不落快照。
+    供赛事中心"赔率走势"按时间轴回放,可覆盖全部 5 种玩法。
+    """
+
+    __tablename__ = "fp_match_odds_snapshots"
+    __table_args__ = (
+        Index("ix_odds_snapshots_match_time", "match_id", "snapshot_time"),
+    )
+
+    snapshot_id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
+    match_id: Mapped[str] = mapped_column(
+        ForeignKey("fp_match_games.match_id"), nullable=False
+    )
+    pools: Mapped[list[dict[str, typing.Any]]] = mapped_column(JSON, nullable=False)
+    snapshot_time: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=datetime.datetime.now
+    )
 
 
 class MatchResult(Base):

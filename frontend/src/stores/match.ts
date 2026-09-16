@@ -49,6 +49,7 @@ export const useMatchStore = defineStore('match', () => {
 
   /** 拉取比赛列表(按售卖日范围过滤,翻页拉全,覆盖跨售卖日的全部在售场次) */
   async function fetchGames(): Promise<void> {
+    if (isLoading.value) return
     isLoading.value = true
     error.value = null
     try {

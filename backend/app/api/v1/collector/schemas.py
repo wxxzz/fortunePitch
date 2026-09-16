@@ -94,6 +94,10 @@ class MatchSyncResultRead(BaseModel):
     odds_count: int = Field(
         default=0, description="写入/刷新玩法赔率的场次数(赔率接口失败时为 0)"
     )
+    odds_snapshot_count: int = Field(
+        default=0,
+        description="因赔率变化而新增的赔率快照条数(未变不落快照)",
+    )
     skipped_leagues: list[str] = Field(
         description="联赛档案未入库而被跳过的联赛,请先同步对应联赛"
     )

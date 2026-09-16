@@ -14,6 +14,7 @@ from app.api.v1.match.schemas import (
     MatchEventRead,
     MatchGameCreate,
     MatchGameRead,
+    MatchOddsSnapshotRead,
     MatchResultRead,
     MatchScoreUpdate,
 )
@@ -21,7 +22,13 @@ from app.collector.sync import result_sync
 from app.core.database import get_db_session
 from app.core.exceptions import DataValidationError, ResourceNotFoundError
 from app.core.security import verify_api_key
-from app.models import MatchEvent, MatchGame, MatchOdds, MatchStatus
+from app.models import (
+    MatchEvent,
+    MatchGame,
+    MatchOdds,
+    MatchOddsSnapshot,
+    MatchStatus,
+)
 from app.services import crud, llm, llm_fundamental
 
 router = APIRouter(prefix="/match", tags=["match"], dependencies=[Depends(verify_api_key)])
@@ -82,6 +89,39 @@ async def get_game(match_id: str, session: AsyncSession = Depends(get_db_session
     if game is None:
         raise ResourceNotFoundError(MatchGame.__tablename__, match_id)
     return game
+
+
+@router.get(
+    "/games/{match_id}/odds-snapshots",
+    response_model=list[MatchOddsSnapshotRead],
+    summary="查询比赛赔率快照历史(赔率走势)",
+)
+async def list_odds_snapshots(
+    match_id: str,
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=200, ge=1, le=500),
+    session: AsyncSession = Depends(get_db_session),
+) -> list[MatchOddsSnapshot]:
+    """查询比赛的赔率快照历史,按快照时间升序,供走势图按时间轴回放。
+
+    快照由赛事同步在赔率发生变化时追加(未变不落),每条含当次采集的
+    全部玩法与赔率。
+
+    Raises:
+        ResourceNotFoundError: 比赛不存在。
+    """
+    game = await session.get(MatchGame, match_id)
+    if game is None:
+        raise ResourceNotFoundError(MatchGame.__tablename__, match_id)
+    stmt = (
+        select(MatchOddsSnapshot)
+        .where(MatchOddsSnapshot.match_id == match_id)
+        .order_by(MatchOddsSnapshot.snapshot_time)
+        .offset(offset)
+        .limit(limit)
+    )
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
 
 
 @router.patch("/games/{match_id}/score", response_model=MatchGameRead)

@@ -20,7 +20,7 @@ from app.core.config import get_settings
 from app.core.database import Base, get_db_session
 from app.core.exceptions import ExternalSourceError
 from app.main import app
-from app.models import League, MatchGame, MatchOdds, MatchStatus, Team
+from app.models import League, MatchGame, MatchOdds, MatchOddsSnapshot, MatchStatus, Team
 
 settings = get_settings()
 HEADERS = {"X-API-Key": settings.API_KEY}
@@ -402,6 +402,116 @@ class TestMatchSync:
         async with session_factory() as session:
             assert len((await session.scalars(select(MatchOdds))).all()) == 1
 
+    async def test_sync_snapshots_odds_on_first_write(
+        self, session_factory: async_sessionmaker
+    ) -> None:
+        async with session_factory() as session:
+            result = await match_sync.sync_matches_by_date(session, "2026-08-24")
+            await session.commit()
+
+        # 首次写入赔率 -> 追加 1 条快照
+        assert result.odds_snapshot_count == 1
+        async with session_factory() as session:
+            snapshots = (
+                await session.scalars(
+                    select(MatchOddsSnapshot).where(
+                        MatchOddsSnapshot.match_id == "2041028"
+                    )
+                )
+            ).all()
+            assert len(snapshots) == 1
+            pool_codes = [p["poolCode"] for p in snapshots[0].pools]
+            assert pool_codes == ["HAD", "HHAD", "CRS", "TTG", "HAFU"]
+            assert snapshots[0].snapshot_time is not None
+
+    async def test_sync_skips_snapshot_when_odds_unchanged(
+        self, session_factory: async_sessionmaker
+    ) -> None:
+        async with session_factory() as session:
+            await match_sync.sync_matches_by_date(session, "2026-08-24")
+            await session.commit()
+        async with session_factory() as session:
+            result = await match_sync.sync_matches_by_date(session, "2026-08-24")
+            await session.commit()
+
+        # 赔率未变 -> 不新增快照
+        assert result.odds_snapshot_count == 0
+        async with session_factory() as session:
+            snapshots = (
+                await session.scalars(select(MatchOddsSnapshot))
+            ).all()
+            assert len(snapshots) == 1
+
+    async def test_sync_snapshots_odds_when_changed(
+        self,
+        session_factory: async_sessionmaker,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        async with session_factory() as session:
+            await match_sync.sync_matches_by_date(session, "2026-08-24")
+            await session.commit()
+
+        # 赔率变化:主胜 2.15 -> 2.05
+        changed_odds = [
+            {
+                "matchId": 2041028,
+                "pools": {
+                    "had": {"h": "2.05", "d": "3.40", "a": "3.20"},
+                    "hhad": {
+                        "h": "1.55", "d": "3.80", "a": "5.50", "goalLine": "-1"
+                    },
+                    "ttg": {
+                        "s0": "8.50", "s1": "4.20", "s2": "3.10", "s3": "3.50",
+                        "s4": "4.00", "s5": "8.00", "s6": "15.00", "s7": "25.00",
+                    },
+                    "crs": {
+                        "s01s00": "7.00", "s01s01": "6.50", "s1sh": "30.00",
+                        "s01s00f": "7.10", "s1shf": "31.00", "goalLine": "-1",
+                        "goalLineValue": "-1.0",
+                    },
+                    "hafu": {"hh": "3.50", "hd": "14.00", "aa": "5.00"},
+                },
+                "updateTime": "2026-08-24 12:00:04",
+            }
+        ]
+
+        async def fetch_changed_odds() -> list[dict[str, typing.Any]]:
+            return changed_odds
+
+        monkeypatch.setattr(sporttery, "fetch_match_odds", fetch_changed_odds)
+        async with session_factory() as session:
+            result = await match_sync.sync_matches_by_date(session, "2026-08-24")
+            await session.commit()
+
+        assert result.odds_snapshot_count == 1
+        async with session_factory() as session:
+            snapshots = (
+                await session.scalars(
+                    select(MatchOddsSnapshot)
+                    .where(MatchOddsSnapshot.match_id == "2041028")
+                    .order_by(MatchOddsSnapshot.snapshot_id)
+                )
+            ).all()
+            assert len(snapshots) == 2
+            had_by_snapshot = [
+                next(
+                    o["odds"]
+                    for p in s.pools
+                    if p["poolCode"] == "HAD"
+                    for o in p["options"]
+                    if o["code"] == "h"
+                )
+                for s in snapshots
+            ]
+            assert had_by_snapshot == [2.15, 2.05]
+            # 即时赔率同步刷新为最新值
+            odds = await session.get(MatchOdds, "2041028")
+            assert odds is not None
+            had = next(
+                o["odds"] for o in odds.pools[0]["options"] if o["code"] == "h"
+            )
+            assert had == 2.05
+
     async def test_sync_survives_odds_source_failure(
         self,
         session_factory: async_sessionmaker,
@@ -460,6 +570,7 @@ class TestSyncAPI:
         assert body["day_match_count"] == 4
         assert body["created_count"] == 2
         assert body["odds_count"] == 1
+        assert body["odds_snapshot_count"] == 1
         assert body["skipped_leagues"] == ["意大利甲级联赛"]
         assert body["source"] == "sporttery"
 

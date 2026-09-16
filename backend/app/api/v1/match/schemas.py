@@ -51,6 +51,17 @@ class MatchOddsRead(BaseModel):
     update_time: datetime.datetime
 
 
+class MatchOddsSnapshotRead(BaseModel):
+    """比赛赔率快照响应模型(采集同步留存的历史时点)。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    snapshot_id: int = Field(description="快照记录 ID")
+    match_id: str
+    pools: list[MatchOddsPoolRead] = Field(description="快照时点的玩法与赔率")
+    snapshot_time: datetime.datetime = Field(description="快照采集时间")
+
+
 class MatchGameRead(BaseModel):
     """比赛响应模型。"""
 

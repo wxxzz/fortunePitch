@@ -4,7 +4,7 @@
  * 顶部对战卡片 + Tab 导航(基本面|历史交锋|高阶数据|赔率走势|策略推荐)
  * + 内容区(结论卡片 / SHAP 归因 / 风险提示)。
  */
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { useMatchStore } from '@/stores/match'
@@ -12,6 +12,7 @@ import { useAnalyticsStore } from '@/stores/analytics'
 import { useStrategyStore } from '@/stores/strategy'
 import { useBaseStore } from '@/stores/base'
 import { getGame, type MatchGame } from '@/api/match/game'
+import { listOddsSnapshots, type MatchOddsSnapshot } from '@/api/match/oddsSnapshot'
 import {
   getLlmAnalysis,
   getLlmFundamentalAnalysis,
@@ -27,9 +28,7 @@ import {
 import ShapAttributionChart, {
   type ShapFeature,
 } from '@/components/analytics/ShapAttributionChart.vue'
-import OddsTrendChart, {
-  type OddsTrendPoint,
-} from '@/components/strategy/OddsTrendChart.vue'
+import OddsTrendChart from '@/components/strategy/OddsTrendChart.vue'
 import SkeletonBlock from '@/components/common/SkeletonBlock.vue'
 
 const route = useRoute()
@@ -211,13 +210,104 @@ const riskWarnings = ref<string[]>([
   '本场主裁判出牌率偏高,中场绞杀或受影响',
 ])
 
-/** 赔率走势(演示数据,数据源接入后替换) */
-const oddsTrendPoints = ref<OddsTrendPoint[]>([
-  { time: 'T-5d', homeWin: 2.1, draw: 3.4, awayWin: 3.2 },
-  { time: 'T-3d', homeWin: 2.0, draw: 3.45, awayWin: 3.35 },
-  { time: 'T-1d', homeWin: 1.92, draw: 3.5, awayWin: 3.6 },
-  { time: '即时', homeWin: 1.88, draw: 3.55, awayWin: 3.7 },
-])
+/** 赔率走势(懒加载:首次切换到该 Tab 时才请求) */
+const snapshots = ref<MatchOddsSnapshot[]>([])
+const isTrendLoading = ref(false)
+const trendError = ref<string | null>(null)
+const hasTrendLoaded = ref(false)
+const activeTrendPoolCode = ref('')
+
+watch(activeTab, (tab) => {
+  if (tab === '赔率走势' && !hasTrendLoaded.value && !isTrendLoading.value) {
+    void loadOddsSnapshots()
+  }
+})
+
+async function loadOddsSnapshots(): Promise<void> {
+  isTrendLoading.value = true
+  trendError.value = null
+  try {
+    snapshots.value = await listOddsSnapshots(matchId)
+    // 成功后才标记已加载,失败时切回本 Tab 可重试
+    hasTrendLoaded.value = true
+    if (activeTrendPoolCode.value === '') {
+      activeTrendPoolCode.value = snapshots.value[0]?.pools[0]?.poolCode ?? ''
+    }
+  } catch (err) {
+    trendError.value = err instanceof Error ? err.message : '赔率走势加载失败'
+  } finally {
+    isTrendLoading.value = false
+  }
+}
+
+/** 快照中出现过的玩法(取并集,让球附最后一次出现的盘口) */
+interface TrendPoolOption {
+  poolCode: string
+  playName: string
+  goalLine?: string
+}
+
+const trendPoolOptions = computed<TrendPoolOption[]>(() => {
+  const map = new Map<string, TrendPoolOption>()
+  // 快照按时间升序遍历,后出现者覆盖;盘口缺失时保留先前值
+  for (const snapshot of snapshots.value) {
+    for (const pool of snapshot.pools) {
+      const existing = map.get(pool.poolCode)
+      map.set(pool.poolCode, {
+        poolCode: pool.poolCode,
+        playName: pool.playName,
+        goalLine: pool.goalLine ?? existing?.goalLine,
+      })
+    }
+  }
+  return [...map.values()]
+})
+
+/** 当前展示的玩法(选择失效时回退到第一个可用玩法) */
+const currentTrendPoolCode = computed(() => {
+  const codes = trendPoolOptions.value.map((p) => p.poolCode)
+  return codes.includes(activeTrendPoolCode.value)
+    ? activeTrendPoolCode.value
+    : (codes[0] ?? '')
+})
+
+function trendPoolLabel(pool: TrendPoolOption): string {
+  return pool.goalLine ? `${pool.playName}(${pool.goalLine})` : pool.playName
+}
+
+/** 当前玩法在各快照中的选项并集(按首次出现顺序) */
+const trendSeries = computed(() => {
+  const map = new Map<string, string>()
+  for (const snapshot of snapshots.value) {
+    const pool = snapshot.pools.find((p) => p.poolCode === currentTrendPoolCode.value)
+    if (!pool) continue
+    for (const option of pool.options) {
+      if (!map.has(option.code)) map.set(option.code, option.label)
+    }
+  }
+  return [...map.entries()].map(([code, label]) => ({ code, label }))
+})
+
+const trendSeriesNames = computed(() => trendSeries.value.map((s) => s.label))
+
+/** 快照时间格式化为 MM-DD HH:mm */
+function formatSnapshotTime(value: string): string {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
+const trendPoints = computed(() =>
+  snapshots.value.map((snapshot) => {
+    const pool = snapshot.pools.find((p) => p.poolCode === currentTrendPoolCode.value)
+    const oddsByCode = new Map(pool?.options.map((o) => [o.code, o.odds]) ?? [])
+    return {
+      time: formatSnapshotTime(snapshot.snapshot_time),
+      values: trendSeries.value.map((s) => oddsByCode.get(s.code) ?? null),
+    }
+  }),
+)
 
 function handleBack(): void {
   void router.push('/match')
@@ -411,8 +501,32 @@ async function loadSavedFundamentalAnalysis(): Promise<void> {
         </div>
 
         <div v-else-if="activeTab === '赔率走势'" class="match-detail__panel">
-          <OddsTrendChart :points="oddsTrendPoints" />
-          <p class="match-detail__hint">演示数据 · 赔率数据源接入后展示真实走势</p>
+          <p v-if="trendError" class="match-detail__error" role="alert">{{ trendError }}</p>
+          <SkeletonBlock v-if="isTrendLoading" :height="320" label="加载赔率走势…" />
+          <template v-else-if="snapshots.length > 0">
+            <nav class="match-detail__trend-pools" role="tablist" aria-label="玩法选择">
+              <button
+                v-for="pool in trendPoolOptions"
+                :key="pool.poolCode"
+                type="button"
+                role="tab"
+                class="match-detail__trend-pool"
+                :class="{ 'match-detail__trend-pool--active': pool.poolCode === currentTrendPoolCode }"
+                :aria-selected="pool.poolCode === currentTrendPoolCode"
+                @click="activeTrendPoolCode = pool.poolCode"
+              >
+                {{ trendPoolLabel(pool) }}
+              </button>
+            </nav>
+            <OddsTrendChart :series-names="trendSeriesNames" :points="trendPoints" />
+            <p class="match-detail__hint">
+              快照随每次"同步赛事"生成,仅记录赔率发生变化的时间点 ·
+              序列较多时可点击图例切换显隐
+            </p>
+          </template>
+          <p v-else class="match-detail__hint">
+            暂无走势数据。赔率快照随每次"同步赛事"生成,多次同步后即可查看变化趋势
+          </p>
         </div>
 
         <div v-else-if="activeTab === '基本面'" class="match-detail__panel">
@@ -723,6 +837,29 @@ async function loadSavedFundamentalAnalysis(): Promise<void> {
     &--active {
       border-bottom-color: vars.$color-primary;
       color: vars.$color-primary;
+      font-weight: 600;
+    }
+  }
+
+  &__trend-pools {
+    display: flex;
+    flex-wrap: wrap;
+    gap: vars.$spacing-xs;
+  }
+
+  &__trend-pool {
+    padding: vars.$spacing-xs vars.$spacing-md;
+    border: 1px solid vars.$color-border;
+    border-radius: 999px;
+    background: vars.$color-surface;
+    color: vars.$color-text-secondary;
+    font-size: vars.$font-size-sm;
+    cursor: pointer;
+
+    &--active {
+      border-color: vars.$color-primary;
+      background: vars.$color-primary;
+      color: #fff;
       font-weight: 600;
     }
   }

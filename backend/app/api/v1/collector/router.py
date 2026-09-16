@@ -158,6 +158,7 @@ async def sync_matches(
         created_count=result.created_count,
         updated_count=result.updated_count,
         odds_count=result.odds_count,
+        odds_snapshot_count=result.odds_snapshot_count,
         skipped_leagues=result.skipped_league_names,
         skipped_matches=result.skipped_matches,
     )

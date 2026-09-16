@@ -26,6 +26,7 @@ from app.models.match import (
     MatchLlmFundDim,
     MatchLlmPlayRec,
     MatchOdds,
+    MatchOddsSnapshot,
     MatchResult,
     MatchStatus,
 )
@@ -46,6 +47,7 @@ __all__ = [
     "MatchGame",
     "MatchEvent",
     "MatchOdds",
+    "MatchOddsSnapshot",
     "MatchResult",
     "MatchStatus",
     "MatchLlmAnalysis",

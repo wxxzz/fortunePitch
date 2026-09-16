@@ -4,10 +4,12 @@
  * 左侧深色导航栏 + 顶部状态栏 + 主内容区 + 右侧滚球抽屉。
  */
 import { ref } from 'vue'
+import { useRoute } from 'vue-router'
 import AppSidebar from '@/components/layout/AppSidebar.vue'
 import TopBar from '@/components/layout/TopBar.vue'
 import QuickPanel from '@/components/layout/QuickPanel.vue'
 
+const route = useRoute()
 const isQuickPanelOpen = ref(false)
 </script>
 
@@ -17,7 +19,8 @@ const isQuickPanelOpen = ref(false)
     <div class="app-shell__main">
       <TopBar @toggle-panel="isQuickPanelOpen = !isQuickPanelOpen" />
       <main class="app-shell__content">
-        <RouterView />
+        <!-- key 绑定完整路径:仅路由参数变化(如切换比赛详情)时也重建视图,避免残留上一场数据 -->
+        <RouterView :key="route.fullPath" />
       </main>
       <footer class="app-shell__footer">
         <p>
