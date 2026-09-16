@@ -149,6 +149,38 @@ class LlmFundamentalAnalysisRead(BaseModel):
     created_at: datetime.datetime = Field(description="生成时间")
 
 
+# ---------- 大模型赔率走势分析 ----------
+
+
+class LlmTrendPlayRead(BaseModel):
+    """单种玩法走势结论响应模型。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    play_code: str = Field(description="玩法编码:HAD/HHAD/CRS/TTG/HAFU")
+    play_name: str = Field(description="玩法展示名,如 胜平负")
+    signal: str = Field(description="走势信号,如 主胜走强 / 平局赔率抬升 / 盘口稳定")
+    confidence: float = Field(ge=0.0, le=1.0, description="置信度,0~1")
+    reasoning: str = Field(description="走势解读")
+
+
+class LlmTrendAnalysisRead(BaseModel):
+    """大模型赔率走势分析结果响应模型(整体研判 + 分玩法走势结论 + 风险提示)。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    analysis_id: int = Field(description="分析记录 ID(落库主键)")
+    match_id: str
+    provider: str = Field(description="服务商:qwen / ark")
+    model: str = Field(description="实际使用的模型名")
+    summary: str = Field(description="整体研判")
+    plays: list[LlmTrendPlayRead] = Field(
+        default_factory=list, description="分玩法走势结论"
+    )
+    risks: list[str] = Field(default_factory=list, description="风险提示")
+    created_at: datetime.datetime = Field(description="生成时间")
+
+
 # ---------- 赛果开奖 ----------
 
 class MatchResultRead(BaseModel):

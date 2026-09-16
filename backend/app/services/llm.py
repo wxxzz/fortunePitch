@@ -33,7 +33,9 @@ from app.models import (
     LlmRequestLog,
     MatchGame,
     MatchLlmAnalysis,
+    MatchLlmFundAnalysis,
     MatchLlmPlayRec,
+    MatchLlmTrendAnalysis,
     MatchStatus,
     TeamFundamentals,
 )
@@ -59,6 +61,13 @@ _STATUS_LABELS: dict[MatchStatus, str] = {
 # 服务商名 -> Settings 字段前缀
 _PROVIDER_PREFIXES: dict[str, str] = {"qwen": "QWEN", "ark": "ARK"}
 
+# 基本面维度优劣倾向 -> 展示名(渲染历史基本面AI分析结论用)
+_EDGE_LABELS: dict[str, str] = {
+    "home": "主队占优",
+    "away": "客队占优",
+    "even": "势均力敌",
+}
+
 # 单场比赛保留的历史分析条数上限(倒序取最近 N 条)
 _ANALYSIS_HISTORY_LIMIT = 20
 
@@ -80,6 +89,10 @@ class MatchAnalysisContext:
     home_fundamentals: TeamFundamentals | None
     away_fundamentals: TeamFundamentals | None
     pools: list[dict[str, typing.Any]]
+    # 历史生成的 AI 基本面分析 / AI 赔率走势分析结论(未生成过为 None),
+    # 作为综合分析的逻辑依据随提示词一并注入
+    fundamental_analysis: MatchLlmFundAnalysis | None = None
+    trend_analysis: MatchLlmTrendAnalysis | None = None
 
 
 class LlmPlayRecommendation(BaseModel):
@@ -130,7 +143,9 @@ async def build_match_analysis_context(
 ) -> MatchAnalysisContext:
     """聚合单场比赛的分析上下文,比赛不存在时抛 404。
 
-    基本面未同步按 None 处理,赔率未同步按空玩法处理,
+    基本面未同步按 None 处理,赔率未同步按空玩法处理;
+    另附带最近一次已保存的 AI 基本面分析与 AI 赔率走势分析结论
+    (由深度分析页对应 Tab 生成,未生成过按 None 处理),
     由提示词明确告知模型数据缺口并压低置信度。
     """
     stmt = (
@@ -155,6 +170,26 @@ async def build_match_analysis_context(
     )
     fundamentals_by_team = {row.team_id: row for row in fundamentals_rows}
 
+    # 最近一次已保存的 AI 基本面 / 赔率走势分析(含明细,直接查询避免服务间循环依赖)
+    fundamental_analysis = (
+        await session.execute(
+            select(MatchLlmFundAnalysis)
+            .options(selectinload(MatchLlmFundAnalysis.dimensions))
+            .where(MatchLlmFundAnalysis.match_id == match_id)
+            .order_by(MatchLlmFundAnalysis.analysis_id.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    trend_analysis = (
+        await session.execute(
+            select(MatchLlmTrendAnalysis)
+            .options(selectinload(MatchLlmTrendAnalysis.plays))
+            .where(MatchLlmTrendAnalysis.match_id == match_id)
+            .order_by(MatchLlmTrendAnalysis.analysis_id.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
     pools = list(game.odds.pools) if game.odds is not None else []
     return MatchAnalysisContext(
         match_id=game.match_id,
@@ -167,6 +202,8 @@ async def build_match_analysis_context(
         home_fundamentals=fundamentals_by_team.get(game.home_team_id),
         away_fundamentals=fundamentals_by_team.get(game.away_team_id),
         pools=pools,
+        fundamental_analysis=fundamental_analysis,
+        trend_analysis=trend_analysis,
     )
 
 
@@ -194,6 +231,30 @@ def _format_fundamentals(team_name: str, f: TeamFundamentals | None, prefix: str
         f"{num('goals_against')},净胜 {num('goal_diff')},积分 {num('points')},"
         f"胜率 {num('win_rate')}%"
     )
+
+
+def _format_fundamental_conclusion(analysis: MatchLlmFundAnalysis | None) -> str:
+    """把历史 AI 基本面分析结论渲染为文本块;未生成过时给出明确提示。"""
+    if analysis is None:
+        return "- 尚未生成 AI 基本面分析(该维度参考缺失,对应玩法置信度应降低)"
+    lines = [f"- 整体研判:{analysis.summary}"]
+    for dim in analysis.dimensions:
+        edge = _EDGE_LABELS.get(dim.edge, dim.edge)
+        lines.append(f"- {dim.title}({edge}):{dim.content}")
+    return "\n".join(lines)
+
+
+def _format_trend_conclusion(analysis: MatchLlmTrendAnalysis | None) -> str:
+    """把历史 AI 赔率走势分析结论渲染为文本块;未生成过时给出明确提示。"""
+    if analysis is None:
+        return "- 尚未生成 AI 赔率走势分析(该维度参考缺失,对应玩法置信度应降低)"
+    lines = [f"- 整体研判:{analysis.summary}"]
+    for play in analysis.plays:
+        lines.append(
+            f"- {play.play_name}:{play.signal},置信度 {float(play.confidence):.2f}"
+            f"({play.reasoning})"
+        )
+    return "\n".join(lines)
 
 
 def _format_pools(pools: list[dict[str, typing.Any]]) -> str:
@@ -224,7 +285,9 @@ def build_analysis_messages(context: MatchAnalysisContext) -> list[dict[str, str
         "1. 只做数据分析,不做投注引导;结论是概率研判,不构成投注建议。\n"
         "2. 严格基于用户提供的联赛信息、球队基本面(积分榜战绩)和竞彩赔率推理,不得编造数据。\n"
         "3. 赔率隐含概率 = 1/赔率;可将各选项隐含概率归一后,与基本面强弱对照,判断分歧点。\n"
-        "4. 数据缺失时(如某队未同步基本面)必须明确说明数据不足,并压低对应玩法置信度。\n"
+        "4. 已生成 AI 基本面分析与 AI 赔率走势分析时,将其作为重要逻辑依据,"
+        "与自身对基本面与赔率数据的推理交叉验证后再下结论。\n"
+        "5. 数据缺失时(如某队未同步基本面)必须明确说明数据不足,并压低对应玩法置信度。\n"
         "\n"
         "输出要求(必须严格遵守):\n"
         "- 只输出一个 JSON 对象,不得输出 JSON 以外的任何文字(包括解释和 Markdown 代码块标记)。\n"
@@ -267,7 +330,13 @@ def build_analysis_messages(context: MatchAnalysisContext) -> list[dict[str, str
         f"{_format_fundamentals(context.away_team_name, context.away_fundamentals, 'away_')}\n"
         f"\n"
         f"【在售玩法赔率】\n"
-        f"{_format_pools(context.pools)}"
+        f"{_format_pools(context.pools)}\n"
+        f"\n"
+        f"【AI 基本面分析结论(历史生成,综合分析参考依据)】\n"
+        f"{_format_fundamental_conclusion(context.fundamental_analysis)}\n"
+        f"\n"
+        f"【AI 赔率走势分析结论(历史生成,综合分析参考依据)】\n"
+        f"{_format_trend_conclusion(context.trend_analysis)}"
     )
     return [
         {"role": "system", "content": system_prompt},

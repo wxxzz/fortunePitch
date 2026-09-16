@@ -87,3 +87,42 @@ export async function getLlmFundamentalAnalysis(
   )
   return data
 }
+
+/** 单种玩法的赔率走势结论 */
+export interface LlmTrendPlay {
+  play_code: string
+  play_name: string
+  signal: string
+  confidence: number
+  reasoning: string
+}
+
+/** 大模型赔率走势分析结果(整体研判 + 分玩法走势结论 + 风险提示) */
+export interface LlmTrendAnalysis {
+  analysis_id: number
+  match_id: string
+  provider: string
+  model: string
+  summary: string
+  plays: LlmTrendPlay[]
+  risks: string[]
+  created_at: string
+}
+
+/** 调用大模型基于赔率快照走势做市场动向分析,生成后保存 */
+export async function runLlmTrendAnalysis(matchId: string): Promise<LlmTrendAnalysis> {
+  const { data } = await request.post<LlmTrendAnalysis>(
+    `/api/v1/match/games/${matchId}/llm-odds-trend`,
+    undefined,
+    { timeout: LLM_TIMEOUT_MS },
+  )
+  return data
+}
+
+/** 查询比赛最近一次已保存的大模型赔率走势分析(未生成过时后端返回 404) */
+export async function getLlmTrendAnalysis(matchId: string): Promise<LlmTrendAnalysis> {
+  const { data } = await request.get<LlmTrendAnalysis>(
+    `/api/v1/match/games/${matchId}/llm-odds-trend`,
+  )
+  return data
+}

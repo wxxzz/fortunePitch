@@ -249,6 +249,67 @@ class MatchLlmPlayRec(Base):
     analysis: Mapped["MatchLlmAnalysis"] = relationship(back_populates="plays")
 
 
+class MatchLlmTrendAnalysis(Base):
+    """大模型赔率走势分析结果表(fp_match_llm_trend_analyses):每次生成一行,保留历史。
+
+    由深度分析页"赔率走势"Tab 生成后落库,记录基于赔率快照序列的整体研判
+    与风险提示;分玩法走势结论明细另由 fp_match_llm_trend_play_recs 承载。
+    """
+
+    __tablename__ = "fp_match_llm_trend_analyses"
+
+    analysis_id: Mapped[int] = mapped_column(
+        BigIntPK, primary_key=True, autoincrement=True
+    )
+    match_id: Mapped[str] = mapped_column(
+        ForeignKey("fp_match_games.match_id"), index=True, nullable=False
+    )
+    provider: Mapped[str] = mapped_column(String(16), nullable=False)
+    model: Mapped[str] = mapped_column(String(64), nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    risks: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=datetime.datetime.now
+    )
+
+    game: Mapped["MatchGame"] = relationship()
+    # 级联删除:主表删除时明细随数据库外键 ON DELETE CASCADE 一并清除
+    plays: Mapped[list["MatchLlmTrendPlay"]] = relationship(
+        back_populates="analysis", cascade="all, delete-orphan", passive_deletes=True
+    )
+
+
+class MatchLlmTrendPlay(Base):
+    """大模型赔率走势分玩法结论明细表(fp_match_llm_trend_play_recs)。
+
+    每种玩法一行,挂在某次走势分析下;(analysis_id, play_code) 唯一,
+    即同一次分析内每种竞彩玩法至多一条走势结论。
+    """
+
+    __tablename__ = "fp_match_llm_trend_play_recs"
+    __table_args__ = (
+        UniqueConstraint("analysis_id", "play_code", name="uk_llm_trend_play"),
+    )
+
+    play_id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
+    analysis_id: Mapped[int] = mapped_column(
+        ForeignKey("fp_match_llm_trend_analyses.analysis_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # 玩法编码 HAD/HHAD/CRS/TTG/HAFU 与展示名
+    play_code: Mapped[str] = mapped_column(String(8), nullable=False)
+    play_name: Mapped[str] = mapped_column(String(16), nullable=False)
+    # 走势信号展示名,如 主胜走强 / 平局赔率抬升 / 盘口稳定
+    signal: Mapped[str] = mapped_column(String(32), nullable=False)
+    # 置信度 0.000~1.000
+    confidence: Mapped[float] = mapped_column(Numeric(4, 3), nullable=False)
+    # 走势解读(须引用快照数据)
+    reasoning: Mapped[str] = mapped_column(String(500), nullable=False)
+
+    analysis: Mapped["MatchLlmTrendAnalysis"] = relationship(back_populates="plays")
+
+
 class MatchLlmFundAnalysis(Base):
     """大模型基本面分析结果表(fp_match_llm_fund_analyses):每次生成一行,保留历史。
 

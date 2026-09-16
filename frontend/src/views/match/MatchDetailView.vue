@@ -16,10 +16,13 @@ import { listOddsSnapshots, type MatchOddsSnapshot } from '@/api/match/oddsSnaps
 import {
   getLlmAnalysis,
   getLlmFundamentalAnalysis,
+  getLlmTrendAnalysis,
   runLlmAnalysis,
   runLlmFundamentalAnalysis,
+  runLlmTrendAnalysis,
   type LlmAnalysis,
   type LlmFundamentalAnalysis,
+  type LlmTrendAnalysis,
 } from '@/api/match/analysis'
 import {
   getTeamFundamentals,
@@ -233,6 +236,8 @@ async function loadOddsSnapshots(): Promise<void> {
     if (activeTrendPoolCode.value === '') {
       activeTrendPoolCode.value = snapshots.value[0]?.pools[0]?.poolCode ?? ''
     }
+    // 快照就绪后顺带加载最近一次已保存的走势分析(无快照时后端会 422,静默忽略)
+    if (snapshots.value.length > 0) void loadSavedTrendAnalysis()
   } catch (err) {
     trendError.value = err instanceof Error ? err.message : '赔率走势加载失败'
   } finally {
@@ -308,6 +313,36 @@ const trendPoints = computed(() =>
     }
   }),
 )
+
+// ---------- 赔率走势 Tab:AI 走势分析 ----------
+
+const trendLlmAnalysis = ref<LlmTrendAnalysis | null>(null)
+const isTrendLlmLoading = ref(false)
+const trendLlmError = ref<string | null>(null)
+
+/** 生成 / 重新生成大模型赔率走势分析(生成后保存,每次生成一条历史) */
+async function handleRunTrendAnalysis(): Promise<void> {
+  isTrendLlmLoading.value = true
+  trendLlmError.value = null
+  try {
+    trendLlmAnalysis.value = await runLlmTrendAnalysis(matchId)
+  } catch (err) {
+    trendLlmError.value =
+      err instanceof Error ? err.message : '赔率走势分析失败,请稍后重试'
+  } finally {
+    isTrendLlmLoading.value = false
+  }
+}
+
+/** 走势数据加载成功后加载最近一次已保存的走势分析(未生成过时按无结果处理) */
+async function loadSavedTrendAnalysis(): Promise<void> {
+  if (trendLlmAnalysis.value !== null || isTrendLlmLoading.value) return
+  try {
+    trendLlmAnalysis.value = await getLlmTrendAnalysis(matchId)
+  } catch {
+    // 未生成过(404)或其他异常均视为无已保存结果,由用户手动生成
+  }
+}
 
 function handleBack(): void {
   void router.push('/match')
@@ -527,6 +562,88 @@ async function loadSavedFundamentalAnalysis(): Promise<void> {
           <p v-else class="match-detail__hint">
             暂无走势数据。赔率快照随每次"同步赛事"生成,多次同步后即可查看变化趋势
           </p>
+
+          <!-- AI 赔率走势分析(基于快照序列聚合调用) -->
+          <h3 class="match-detail__section-title">AI 赔率走势分析</h3>
+          <div class="match-detail__llm-toolbar">
+            <button
+              class="match-detail__llm-button"
+              type="button"
+              :disabled="isTrendLlmLoading || snapshots.length === 0"
+              :aria-busy="isTrendLlmLoading"
+              @click="handleRunTrendAnalysis"
+            >
+              {{
+                isTrendLlmLoading
+                  ? '正在分析…'
+                  : trendLlmAnalysis
+                    ? '重新生成走势分析'
+                    : '赔率走势分析'
+              }}
+            </button>
+            <p class="match-detail__hint">
+              基于赔率快照走势调用大模型研判市场资金动向 · 仅供参考,不构成投注建议
+            </p>
+          </div>
+
+          <p v-if="trendLlmError" class="match-detail__error" role="alert">
+            {{ trendLlmError }}
+          </p>
+
+          <SkeletonBlock
+            v-if="isTrendLlmLoading"
+            :height="240"
+            label="正在调用大模型分析赔率走势(约需 10~30 秒)…"
+          />
+
+          <template v-else-if="trendLlmAnalysis">
+            <div class="match-detail__llm-summary">
+              <span class="match-detail__llm-meta">
+                模型 {{ trendLlmAnalysis.model }}({{
+                  PROVIDER_LABELS[trendLlmAnalysis.provider] ?? trendLlmAnalysis.provider
+                }})
+                · 生成于 {{ new Date(trendLlmAnalysis.created_at).toLocaleString() }}
+              </span>
+              <p class="match-detail__llm-summary-text">{{ trendLlmAnalysis.summary }}</p>
+            </div>
+
+            <h3 class="match-detail__section-title">分玩法走势结论</h3>
+            <div class="match-detail__llm-plays">
+              <article
+                v-for="play in trendLlmAnalysis.plays"
+                :key="play.play_code"
+                class="match-detail__llm-play"
+              >
+                <header class="match-detail__llm-play-head">
+                  <span class="match-detail__llm-play-name">{{ play.play_name }}</span>
+                  <strong class="match-detail__llm-play-rec">{{ play.signal }}</strong>
+                </header>
+                <div class="match-detail__llm-confidence">
+                  <span>置信度 {{ (play.confidence * 100).toFixed(0) }}%</span>
+                  <div class="match-detail__llm-bar" role="presentation">
+                    <span
+                      class="match-detail__llm-bar-fill"
+                      :style="{ width: `${Math.round(play.confidence * 100)}%` }"
+                    />
+                  </div>
+                </div>
+                <p class="match-detail__llm-reasoning">{{ play.reasoning }}</p>
+              </article>
+            </div>
+
+            <h3 class="match-detail__section-title">风险提示</h3>
+            <ul v-if="trendLlmAnalysis.risks.length" class="match-detail__risks">
+              <li v-for="risk in trendLlmAnalysis.risks" :key="risk">
+                <span class="match-detail__risk-icon" aria-hidden="true">⚠</span>
+                {{ risk }}
+              </li>
+            </ul>
+            <p v-else class="match-detail__hint">模型未给出额外风险提示</p>
+          </template>
+
+          <p v-else-if="snapshots.length > 0" class="match-detail__hint">
+            点击"赔率走势分析",大模型将基于本场赔率快照序列输出市场资金动向研判。
+          </p>
         </div>
 
         <div v-else-if="activeTab === '基本面'" class="match-detail__panel">
@@ -681,7 +798,8 @@ async function loadSavedFundamentalAnalysis(): Promise<void> {
               {{ isLlmLoading ? '正在分析…' : llmAnalysis ? '重新生成分析' : '生成 AI 分析' }}
             </button>
             <p class="match-detail__hint">
-              后端将聚合本场联赛信息、双方基本面与在售玩法赔率调用大模型 · 仅供参考,不构成投注建议
+              后端将聚合本场联赛信息、双方基本面、在售玩法赔率,以及已生成的
+              AI 基本面分析与赔率走势分析结论调用大模型 · 仅供参考,不构成投注建议
             </p>
           </div>
 
@@ -740,7 +858,8 @@ async function loadSavedFundamentalAnalysis(): Promise<void> {
           </template>
 
           <p v-else class="match-detail__hint">
-            点击"生成 AI 分析",大模型将基于本场基本面、赔率与联赛信息输出各竞彩玩法的推荐方案。
+            点击"生成 AI 分析",大模型将基于本场基本面、赔率与联赛信息,
+            并结合已生成的 AI 基本面分析与赔率走势分析结论,输出各竞彩玩法的推荐方案。
           </p>
         </div>
       </div>

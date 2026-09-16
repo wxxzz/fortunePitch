@@ -8,6 +8,7 @@
 网络层(llm._call_chat)全部打桩,测试不发起真实请求。
 """
 
+import dataclasses
 import datetime
 import typing
 
@@ -25,7 +26,11 @@ from app.models import (
     LlmRequestLog,
     MatchGame,
     MatchLlmAnalysis,
+    MatchLlmFundAnalysis,
+    MatchLlmFundDim,
     MatchLlmPlayRec,
+    MatchLlmTrendAnalysis,
+    MatchLlmTrendPlay,
     MatchOdds,
     MatchStatus,
     Team,
@@ -243,6 +248,62 @@ class TestBuildAnalysisMessages:
         user_text = llm.build_analysis_messages(self._context())[1]["content"]
         assert "未同步基本面数据" in user_text
 
+    def test_missing_ai_conclusions_are_flagged(self) -> None:
+        user_text = llm.build_analysis_messages(self._context())[1]["content"]
+        assert "尚未生成 AI 基本面分析" in user_text
+        assert "尚未生成 AI 赔率走势分析" in user_text
+
+    def test_prior_ai_conclusions_injected_into_prompt(self) -> None:
+        fundamental = MatchLlmFundAnalysis(
+            analysis_id=1,
+            match_id="m-1",
+            provider="qwen",
+            model="qwen-plus",
+            summary="主队基本面整体占优。",
+            risks=[],
+        )
+        fundamental.dimensions = [
+            MatchLlmFundDim(
+                dim_id=1,
+                analysis_id=1,
+                code="RECENT_FORM",
+                title="近期状态",
+                edge="home",
+                content="主队近3轮全胜",
+            )
+        ]
+        trend = MatchLlmTrendAnalysis(
+            analysis_id=1,
+            match_id="m-1",
+            provider="qwen",
+            model="qwen-plus",
+            summary="市场资金明显倾向主队。",
+            risks=[],
+        )
+        trend.plays = [
+            MatchLlmTrendPlay(
+                play_id=1,
+                analysis_id=1,
+                play_code="HAD",
+                play_name="胜平负",
+                signal="主胜走强",
+                confidence=0.62,
+                reasoning="主胜由2.15降至1.95",
+            )
+        ]
+        context = dataclasses.replace(
+            self._context(),
+            fundamental_analysis=fundamental,
+            trend_analysis=trend,
+        )
+        user_text = llm.build_analysis_messages(context)[1]["content"]
+        # 基本面结论(整体研判 + 维度明细)与走势结论(玩法信号)进入提示词
+        assert "主队基本面整体占优。" in user_text
+        assert "近期状态(主队占优):主队近3轮全胜" in user_text
+        assert "市场资金明显倾向主队。" in user_text
+        assert "胜平负:主胜走强,置信度 0.62" in user_text
+        assert "尚未生成" not in user_text
+
     def test_system_prompt_requires_json_only(self) -> None:
         system_text = llm.build_analysis_messages(self._context())[0]["content"]
         assert "只输出一个 JSON 对象" in system_text
@@ -457,6 +518,44 @@ class TestLlmAnalysisEndpoint:
             assert any("巴塞罗那" in m["content"] for m in log.request_messages)
             assert log.request_params["max_tokens"] > 0
             assert "HAD" in (log.response_content or "")
+
+    async def test_prompt_includes_saved_prior_ai_analyses(
+        self,
+        env: tuple[AsyncClient, async_sessionmaker],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        client, session_factory = env
+        match_id = await _seed_match(session_factory)
+        # 预置已保存的 AI 赔率走势分析(AI 基本面分析保持未生成)
+        async with session_factory() as session:
+            session.add(
+                MatchLlmTrendAnalysis(
+                    match_id=match_id,
+                    provider="qwen",
+                    model="qwen-plus",
+                    summary="市场资金明显倾向主队。",
+                    risks=[],
+                )
+            )
+            await session.commit()
+        monkeypatch.setattr(llm, "_call_chat", _stub_chat())
+
+        # 上下文聚合:带上最近一次已保存的走势分析
+        async with session_factory() as session:
+            context = await llm.build_match_analysis_context(session, match_id)
+        assert context.trend_analysis is not None
+        assert context.trend_analysis.summary == "市场资金明显倾向主队。"
+        assert context.fundamental_analysis is None
+
+        response = await client.post(f"/api/v1/match/games/{match_id}/llm-analysis")
+        assert response.status_code == 200
+        async with session_factory() as session:
+            logs = list((await session.execute(select(LlmRequestLog))).scalars().all())
+            assert len(logs) == 1
+            user_text = logs[0].request_messages[1]["content"]
+            # 已生成的走势结论注入提示词,未生成的基本面结论明确标注缺失
+            assert "市场资金明显倾向主队。" in user_text
+            assert "尚未生成 AI 基本面分析" in user_text
 
     async def test_failed_call_writes_failed_request_log(
         self,

@@ -10,6 +10,7 @@ from sqlalchemy.orm import selectinload
 from app.api.v1.match.schemas import (
     LlmAnalysisRead,
     LlmFundamentalAnalysisRead,
+    LlmTrendAnalysisRead,
     MatchEventCreate,
     MatchEventRead,
     MatchGameCreate,
@@ -29,7 +30,7 @@ from app.models import (
     MatchOddsSnapshot,
     MatchStatus,
 )
-from app.services import crud, llm, llm_fundamental
+from app.services import crud, llm, llm_fundamental, llm_odds_trend
 
 router = APIRouter(prefix="/match", tags=["match"], dependencies=[Depends(verify_api_key)])
 
@@ -264,6 +265,67 @@ async def list_llm_fundamentals(
     return [
         LlmFundamentalAnalysisRead.model_validate(row)
         for row in await llm_fundamental.list_fundamentals(session, match_id)
+    ]
+
+
+@router.post(
+    "/games/{match_id}/llm-odds-trend",
+    response_model=LlmTrendAnalysisRead,
+    summary="大模型赔率走势分析(生成后保存)",
+)
+async def analyze_game_odds_trend(
+    match_id: str, session: AsyncSession = Depends(get_db_session)
+) -> LlmTrendAnalysisRead:
+    """调用大模型基于赔率快照序列做市场动向分析并落库,分玩法给出走势结论。
+
+    服务端聚合 fp_match_odds_snapshots 中该场的时间正序快照(最多最近 50 条)
+    后构造提示词调用 OpenAI 兼容接口;调用过程写入请求日志表
+    (fp_llm_request_logs),每次生成保存一条历史记录
+    (fp_match_llm_trend_analyses)。结果为数据分析参考,不构成投注建议。
+
+    Raises:
+        ResourceNotFoundError: 比赛不存在。
+        DataValidationError: 该场尚无赔率快照(422)。
+        LlmNotConfiguredError: 未配置 LLM API Key(503)。
+        LlmServiceError: 大模型调用或输出解析失败(502)。
+    """
+    context = await llm_odds_trend.build_trend_context(session, match_id)
+    analysis = await llm_odds_trend.analyze_odds_trend(context)
+    saved = await llm_odds_trend.save_trend_analysis(session, analysis)
+    return LlmTrendAnalysisRead.model_validate(saved)
+
+
+@router.get(
+    "/games/{match_id}/llm-odds-trend",
+    response_model=LlmTrendAnalysisRead,
+    summary="查询最近一次已保存的大模型赔率走势分析",
+)
+async def get_latest_llm_odds_trend(
+    match_id: str, session: AsyncSession = Depends(get_db_session)
+) -> LlmTrendAnalysisRead:
+    """查询比赛最近一次已保存的赔率走势分析(含分玩法明细)。
+
+    Raises:
+        ResourceNotFoundError: 该比赛尚未生成过走势分析。
+    """
+    analysis = await llm_odds_trend.get_latest_trend_analysis(session, match_id)
+    if analysis is None:
+        raise ResourceNotFoundError("大模型赔率走势分析结果", match_id)
+    return LlmTrendAnalysisRead.model_validate(analysis)
+
+
+@router.get(
+    "/games/{match_id}/llm-odds-trend-analyses",
+    response_model=list[LlmTrendAnalysisRead],
+    summary="查询比赛的大模型赔率走势分析历史",
+)
+async def list_llm_odds_trends(
+    match_id: str, session: AsyncSession = Depends(get_db_session)
+) -> list[LlmTrendAnalysisRead]:
+    """查询比赛的历史走势分析列表,按生成时间倒序,最多返回最近 20 条。"""
+    return [
+        LlmTrendAnalysisRead.model_validate(row)
+        for row in await llm_odds_trend.list_trend_analyses(session, match_id)
     ]
 
 
