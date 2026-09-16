@@ -5,6 +5,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.strategy.schemas import (
+    BetSchemeCreate,
+    BetSchemeRead,
     OddsHistoryCreate,
     OddsHistoryRead,
     RecommendationCreate,
@@ -20,8 +22,9 @@ from app.api.v1.strategy.schemas import (
 from app.core.database import get_db_session
 from app.core.exceptions import DataValidationError
 from app.core.security import verify_api_key
-from app.models import MatchGame, OddsHistory, Recommendation, UserDecision
+from app.models import BetScheme, MatchGame, OddsHistory, Recommendation, UserDecision
 from app.services import crud
+from app.services.parlay import ParlayPick, list_bet_schemes, save_bet_scheme
 from app.services.poisson import kelly_fraction
 from app.services.user_picks import UserPick, create_user_picks
 
@@ -188,6 +191,53 @@ async def delete_user_decision(
 ) -> None:
     """删除用户决策。"""
     await crud.delete_entity(session, UserDecision, decision_id)
+
+
+# ---------- 串关虚拟投注方案 /bet-schemes ----------
+
+@router.post(
+    "/bet-schemes",
+    response_model=BetSchemeRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="保存串关虚拟投注方案",
+)
+async def create_bet_scheme(
+    payload: BetSchemeCreate, session: AsyncSession = Depends(get_db_session)
+) -> BetScheme:
+    """赛事中心串关确认入口:校验组合规则并保存方案。
+
+    服务端按竞彩串关口径计算注数/总投入/单注最高赔率,
+    注额为模拟数据,仅用于复盘,不涉及真实资金。
+    """
+    return await save_bet_scheme(
+        session,
+        user_id=payload.user_id,
+        parlay_size=payload.parlay_size,
+        stake_per_bet=payload.stake_per_bet,
+        picks=[
+            ParlayPick(
+                match_id=i.match_id,
+                match_name=i.match_name,
+                pool_code=i.pool_code,
+                play_name=i.play_name,
+                option_code=i.option_code,
+                option_label=i.option_label,
+                odds=i.odds,
+            )
+            for i in payload.items
+        ],
+    )
+
+
+@router.get("/bet-schemes", response_model=list[BetSchemeRead])
+async def list_schemes(
+    user_id: int | None = Query(default=None, description="按用户过滤"),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=20, ge=1, le=100),
+    session: AsyncSession = Depends(get_db_session),
+) -> list[BetScheme]:
+    """分页查询串关虚拟投注方案,可按用户过滤,按创建时间倒序。"""
+    return await list_bet_schemes(session, user_id=user_id, offset=offset, limit=limit)
 
 
 # ---------- 凯利指数 /kelly ----------

@@ -14,10 +14,11 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    Integer,
     Numeric,
     String,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base, BigIntPK
 
@@ -100,3 +101,74 @@ class UserDecision(Base):
     )
     # 盈亏金额(复盘时由系统结算生成,模拟数据)
     profit_loss: Mapped[float | None] = mapped_column(Numeric(10, 2), nullable=True)
+
+
+class BetScheme(Base):
+    """串关投注方案表(fp_strategy_bet_schemes):虚拟投注的串关方案。
+
+    注额均为模拟数据(虚拟投注),仅用于方案留存与复盘,
+    不涉及任何真实资金流转。注数与单注最高赔率由服务端按
+    串关组合规则计算,不信任前端上传值。
+    """
+
+    __tablename__ = "fp_strategy_bet_schemes"
+
+    scheme_id: Mapped[int] = mapped_column(
+        BigIntPK, primary_key=True, autoincrement=True
+    )
+    user_id: Mapped[int] = mapped_column(BigIntPK, index=True, nullable=False)
+    # 串关场次:N串1 的 N(如 2串1 / 3串1 / 4串1)
+    parlay_size: Mapped[int] = mapped_column(
+        Integer, nullable=False
+    )
+    # 每注模拟注额
+    stake_per_bet: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
+    # 总注数(N 场组合数 x 各场复式选项数,由服务端计算)
+    bet_count: Mapped[int] = mapped_column(
+        Integer, nullable=False
+    )
+    # 总投入 = 每注注额 x 总注数
+    total_stake: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+    # 单注最高赔率(组合内各场最高赔率乘积的最大值)
+    max_odds: Mapped[float] = mapped_column(Numeric(12, 2), nullable=True)
+    # 虚拟结算状态:PENDING=待结算 / WIN=全部命中 / LOSS=未全中
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="PENDING")
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=datetime.datetime.now
+    )
+
+    items: Mapped[list["BetSchemeItem"]] = relationship(
+        back_populates="scheme", cascade="all, delete-orphan", passive_deletes=True
+    )
+
+
+class BetSchemeItem(Base):
+    """串关方案选注明细表(fp_strategy_bet_scheme_items)。
+
+    每条选注一行,挂在某个方案下;记录勾选时点的赔率快照,
+    与串关组合规则共同决定注数(同场多选项=复式)。
+    """
+
+    __tablename__ = "fp_strategy_bet_scheme_items"
+
+    item_id: Mapped[int] = mapped_column(
+        BigIntPK, primary_key=True, autoincrement=True
+    )
+    scheme_id: Mapped[int] = mapped_column(
+        ForeignKey("fp_strategy_bet_schemes.scheme_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    match_id: Mapped[str] = mapped_column(
+        ForeignKey("fp_match_games.match_id"), nullable=False
+    )
+    # 比赛对阵快照(如 "巴塞罗那 vs 皇家马德里")
+    match_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    pool_code: Mapped[str] = mapped_column(String(8), nullable=False)
+    play_name: Mapped[str] = mapped_column(String(16), nullable=False)
+    option_code: Mapped[str] = mapped_column(String(16), nullable=False)
+    option_label: Mapped[str] = mapped_column(String(32), nullable=False)
+    # 勾选时点的赔率快照
+    odds: Mapped[float] = mapped_column(Numeric(8, 2), nullable=False)
+
+    scheme: Mapped["BetScheme"] = relationship(back_populates="items")

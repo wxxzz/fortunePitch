@@ -91,9 +91,9 @@ function closeConfirm(): void {
   isConfirmVisible.value = false
 }
 
-function handleConfirmSuccess(decisionCount: number): void {
+function handleConfirmSuccess(betCount: number): void {
   isConfirmVisible.value = false
-  successMessage.value = `已提交 ${decisionCount} 条模拟决策,可在策略中心复盘`
+  successMessage.value = `已提交 ${betCount} 注模拟投注,可在复盘中心查看`
   window.setTimeout(() => {
     successMessage.value = ''
   }, 4000)

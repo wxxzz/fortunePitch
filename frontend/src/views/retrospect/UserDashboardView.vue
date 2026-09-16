@@ -1,11 +1,13 @@
 <script setup lang="ts">
 /**
  * 页面D:个人复盘中心(User Dashboard)。
- * 核心指标卡片 + 收益走势折线图 + 分布饼图 + 历史决策列表(支持复盘回溯)。
+ * 核心指标卡片 + 收益走势折线图 + 分布饼图 + 历史决策列表(支持复盘回溯)
+ * + 串关虚拟投注方案列表(可展开查看选注明细)。
  */
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
+import { listBetSchemes, type BetScheme } from '@/api/strategy/betScheme'
 import { useStrategyStore } from '@/stores/strategy'
 import KpiCard from '@/components/retrospect/KpiCard.vue'
 import ProfitCurveChart, {
@@ -15,12 +17,35 @@ import DistributionPieChart, {
   type DistributionSlice,
 } from '@/components/retrospect/DistributionPieChart.vue'
 
+/** 演示用户 ID(与投注确认弹窗一致) */
+const DEMO_USER_ID = 1
+
 const router = useRouter()
 const strategyStore = useStrategyStore()
 const { decisions, isLoading, error } = storeToRefs(strategyStore)
 
+// ---------- 串关虚拟投注方案 ----------
+
+const schemes = ref<BetScheme[]>([])
+const schemesError = ref('')
+/** 当前展开明细的方案 ID */
+const expandedSchemeId = ref<number | null>(null)
+
+async function loadSchemes(): Promise<void> {
+  try {
+    schemes.value = await listBetSchemes({ user_id: DEMO_USER_ID, limit: 50 })
+  } catch (err) {
+    schemesError.value = err instanceof Error ? err.message : '串关方案加载失败'
+  }
+}
+
+function toggleSchemeDetail(schemeId: number): void {
+  expandedSchemeId.value = expandedSchemeId.value === schemeId ? null : schemeId
+}
+
 onMounted(() => {
   void strategyStore.fetchAll()
+  void loadSchemes()
 })
 
 // ---------- 核心指标 ----------
@@ -101,6 +126,21 @@ const statusLabel: Record<string, string> = {
   WIN: '命中',
   LOSS: '未中',
   PUSH: '走盘',
+}
+
+/** 串关方案结算状态展示 */
+const schemeStatusLabel: Record<string, string> = {
+  PENDING: '待结算',
+  WIN: '全部命中',
+  LOSS: '未全中',
+}
+
+/** 方案创建时间展示(本地时区,精确到分钟) */
+function formatSchemeTime(iso: string): string {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return iso
+  const pad = (n: number): string => `${n}`.padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
 
 function handleReview(recommendId: number): void {
@@ -185,6 +225,69 @@ function handleReview(recommendId: number): void {
           </tr>
           <tr v-if="decisions.length === 0">
             <td colspan="7" class="user-dashboard__empty">暂无决策记录</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- 串关虚拟投注方案列表 -->
+    <div class="user-dashboard__panel">
+      <h3 class="user-dashboard__section-title">串关方案(虚拟投注)</h3>
+      <p v-if="schemesError" class="user-dashboard__error" role="alert">
+        {{ schemesError }}
+      </p>
+      <table class="user-dashboard__table">
+        <thead>
+          <tr>
+            <th>方案 ID</th><th>过关方式</th><th>注数</th><th>每注注额</th>
+            <th>总投入</th><th>单注最高赔率</th><th>状态</th><th>创建时间</th><th>操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          <template v-for="scheme in schemes" :key="scheme.scheme_id">
+            <tr>
+              <td>{{ scheme.scheme_id }}</td>
+              <td>{{ scheme.parlay_size }}串1</td>
+              <td>{{ scheme.bet_count }}</td>
+              <td>{{ scheme.stake_per_bet.toFixed(2) }}</td>
+              <td>{{ scheme.total_stake.toFixed(2) }}</td>
+              <td>{{ scheme.max_odds?.toFixed(2) ?? '-' }}</td>
+              <td
+                class="user-dashboard__status"
+                :class="`user-dashboard__status--${scheme.status.toLowerCase()}`"
+              >
+                {{ schemeStatusLabel[scheme.status] ?? scheme.status }}
+              </td>
+              <td>{{ formatSchemeTime(scheme.created_at) }}</td>
+              <td>
+                <button
+                  class="user-dashboard__review-btn"
+                  type="button"
+                  @click="toggleSchemeDetail(scheme.scheme_id)"
+                >
+                  {{ expandedSchemeId === scheme.scheme_id ? '收起' : '明细' }}
+                </button>
+              </td>
+            </tr>
+            <tr v-if="expandedSchemeId === scheme.scheme_id">
+              <td colspan="9" class="user-dashboard__scheme-items">
+                <ul class="user-dashboard__scheme-list">
+                  <li
+                    v-for="item in scheme.items"
+                    :key="item.item_id"
+                    class="user-dashboard__scheme-item"
+                  >
+                    <span class="user-dashboard__scheme-match">{{ item.match_name }}</span>
+                    <span>{{ item.play_name }}</span>
+                    <span>{{ item.option_label }}</span>
+                    <span class="user-dashboard__scheme-odds">@{{ item.odds.toFixed(2) }}</span>
+                  </li>
+                </ul>
+              </td>
+            </tr>
+          </template>
+          <tr v-if="schemes.length === 0">
+            <td colspan="9" class="user-dashboard__empty">暂无串关方案</td>
           </tr>
         </tbody>
       </table>
@@ -288,6 +391,37 @@ function handleReview(recommendId: number): void {
   &__empty {
     color: vars.$color-text-secondary;
     text-align: center;
+  }
+
+  &__scheme-items {
+    background: vars.$color-bg;
+  }
+
+  &__scheme-list {
+    display: flex;
+    flex-direction: column;
+    gap: vars.$spacing-xs;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  &__scheme-item {
+    display: flex;
+    align-items: center;
+    gap: vars.$spacing-md;
+    font-size: vars.$font-size-sm;
+  }
+
+  &__scheme-match {
+    min-width: 180px;
+    font-weight: 600;
+  }
+
+  &__scheme-odds {
+    margin-left: auto;
+    color: vars.$color-positive;
+    font-weight: 600;
   }
 }
 </style>
