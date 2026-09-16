@@ -223,3 +223,64 @@ class MatchLlmPlayRec(Base):
     alternatives: Mapped[list[str]] = mapped_column(JSON, nullable=False)
 
     analysis: Mapped["MatchLlmAnalysis"] = relationship(back_populates="plays")
+
+
+class MatchLlmFundAnalysis(Base):
+    """大模型基本面分析结果表(fp_match_llm_fund_analyses):每次生成一行,保留历史。
+
+    由深度分析页“基本面”Tab 生成后落库,记录整体研判与风险提示;
+    六维度结论明细另由 fp_match_llm_fund_dims 承载。
+    """
+
+    __tablename__ = "fp_match_llm_fund_analyses"
+
+    analysis_id: Mapped[int] = mapped_column(
+        BigIntPK, primary_key=True, autoincrement=True
+    )
+    match_id: Mapped[str] = mapped_column(
+        ForeignKey("fp_match_games.match_id"), index=True, nullable=False
+    )
+    provider: Mapped[str] = mapped_column(String(16), nullable=False)
+    model: Mapped[str] = mapped_column(String(64), nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    risks: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=datetime.datetime.now
+    )
+
+    game: Mapped["MatchGame"] = relationship()
+    # 级联删除:主表删除时明细随数据库外键 ON DELETE CASCADE 一并清除
+    dimensions: Mapped[list["MatchLlmFundDim"]] = relationship(
+        back_populates="analysis", cascade="all, delete-orphan", passive_deletes=True
+    )
+
+
+class MatchLlmFundDim(Base):
+    """大模型基本面维度结论明细表(fp_match_llm_fund_dims)。
+
+    每个维度一行,挂在某次基本面分析下;(analysis_id, dim_code) 唯一,
+    即同一次分析内每个维度至多一条结论。
+    """
+
+    __tablename__ = "fp_match_llm_fund_dims"
+    __table_args__ = (
+        UniqueConstraint("analysis_id", "dim_code", name="uk_llm_fund_dim"),
+    )
+
+    dim_id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
+    analysis_id: Mapped[int] = mapped_column(
+        ForeignKey("fp_match_llm_fund_analyses.analysis_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # 维度编码 RECENT_FORM/HOME_AWAY/ATTACK_DEFENSE/MOTIVATION/H2H/OTHER 与展示名
+    # (属性名与响应 schema 对齐,数据库列名保持 dim_ 前缀)
+    code: Mapped[str] = mapped_column("dim_code", String(32), nullable=False)
+    title: Mapped[str] = mapped_column("dim_title", String(32), nullable=False)
+    # 优劣倾向:home=主队占优 / away=客队占优 / even=势均力敌
+    edge: Mapped[str] = mapped_column(String(8), nullable=False)
+    content: Mapped[str] = mapped_column(String(1000), nullable=False)
+
+    analysis: Mapped["MatchLlmFundAnalysis"] = relationship(
+        back_populates="dimensions"
+    )

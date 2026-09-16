@@ -12,7 +12,14 @@ import { useAnalyticsStore } from '@/stores/analytics'
 import { useStrategyStore } from '@/stores/strategy'
 import { useBaseStore } from '@/stores/base'
 import { getGame, type MatchGame } from '@/api/match/game'
-import { getLlmAnalysis, runLlmAnalysis, type LlmAnalysis } from '@/api/match/analysis'
+import {
+  getLlmAnalysis,
+  getLlmFundamentalAnalysis,
+  runLlmAnalysis,
+  runLlmFundamentalAnalysis,
+  type LlmAnalysis,
+  type LlmFundamentalAnalysis,
+} from '@/api/match/analysis'
 import {
   getTeamFundamentals,
   type TeamFundamentals,
@@ -46,6 +53,7 @@ onMounted(async () => {
   void analyticsStore.fetchTeamStats(matchId)
   void strategyStore.fetchAll()
   void loadSavedAnalysis()
+  void loadSavedFundamentalAnalysis()
   try {
     game.value = await getGame(matchId)
     // 比赛详情就绪后并行拉取双方球队基本面(未同步过时按无数据处理)
@@ -249,6 +257,43 @@ async function loadSavedAnalysis(): Promise<void> {
     // 未生成过(404)或其他异常均视为无已保存结果,由用户手动生成
   }
 }
+
+// ---------- 基本面 Tab:AI 基本面分析 ----------
+
+const llmFundamental = ref<LlmFundamentalAnalysis | null>(null)
+const isFundamentalLlmLoading = ref(false)
+const fundamentalLlmError = ref<string | null>(null)
+
+/** 维度优劣倾向 -> 展示名 */
+const EDGE_LABELS: Record<string, string> = {
+  home: '主队占优',
+  away: '客队占优',
+  even: '势均力敌',
+}
+
+/** 生成 / 重新生成基本面多维度分析(生成后保存,每次生成一条历史) */
+async function handleRunFundamentalAnalysis(): Promise<void> {
+  isFundamentalLlmLoading.value = true
+  fundamentalLlmError.value = null
+  try {
+    llmFundamental.value = await runLlmFundamentalAnalysis(matchId)
+  } catch (err) {
+    fundamentalLlmError.value =
+      err instanceof Error ? err.message : '基本面分析失败,请稍后重试'
+  } finally {
+    isFundamentalLlmLoading.value = false
+  }
+}
+
+/** 进入页面时加载最近一次已保存的基本面分析(未生成过时按无结果处理) */
+async function loadSavedFundamentalAnalysis(): Promise<void> {
+  if (llmFundamental.value !== null || isFundamentalLlmLoading.value) return
+  try {
+    llmFundamental.value = await getLlmFundamentalAnalysis(matchId)
+  } catch {
+    // 未生成过(404)或其他异常均视为无已保存结果,由用户手动生成
+  }
+}
 </script>
 
 <template>
@@ -423,6 +468,86 @@ async function loadSavedAnalysis(): Promise<void> {
           </template>
           <p v-else class="match-detail__hint">
             暂无球队基本面数据。请在“数据采集”页对两队所属联赛执行“同步基本面”。
+          </p>
+
+          <!-- AI 基本面多维度分析(球队档案 / 赛程赛果 / 积分榜聚合调用) -->
+          <h3 class="match-detail__section-title">AI 基本面分析</h3>
+          <div class="match-detail__llm-toolbar">
+            <button
+              class="match-detail__llm-button"
+              type="button"
+              :disabled="isFundamentalLlmLoading"
+              :aria-busy="isFundamentalLlmLoading"
+              @click="handleRunFundamentalAnalysis"
+            >
+              {{
+                isFundamentalLlmLoading
+                  ? '正在分析…'
+                  : llmFundamental
+                    ? '重新生成基本面分析'
+                    : '生成基本面分析'
+              }}
+            </button>
+            <p class="match-detail__hint">
+              基于球队档案、近期赛程赛果、积分榜与后续赛程做多维度基本面研判 ·
+              仅供参考,不构成投注建议
+            </p>
+          </div>
+
+          <p v-if="fundamentalLlmError" class="match-detail__error" role="alert">
+            {{ fundamentalLlmError }}
+          </p>
+
+          <SkeletonBlock
+            v-if="isFundamentalLlmLoading"
+            :height="240"
+            label="正在调用大模型分析基本面(约需 10~30 秒)…"
+          />
+
+          <template v-else-if="llmFundamental">
+            <div class="match-detail__llm-summary">
+              <span class="match-detail__llm-meta">
+                模型 {{ llmFundamental.model }}({{
+                  PROVIDER_LABELS[llmFundamental.provider] ?? llmFundamental.provider
+                }})
+                · 生成于 {{ new Date(llmFundamental.created_at).toLocaleString() }}
+              </span>
+              <p class="match-detail__llm-summary-text">{{ llmFundamental.summary }}</p>
+            </div>
+
+            <div class="match-detail__llm-dimensions">
+              <article
+                v-for="dim in llmFundamental.dimensions"
+                :key="dim.code"
+                class="match-detail__llm-dim"
+              >
+                <header class="match-detail__llm-dim-head">
+                  <span class="match-detail__llm-dim-title">{{ dim.title }}</span>
+                  <span
+                    class="match-detail__llm-edge"
+                    :class="`match-detail__llm-edge--${dim.edge}`"
+                  >
+                    {{ EDGE_LABELS[dim.edge] ?? '势均力敌' }}
+                  </span>
+                </header>
+                <p class="match-detail__llm-reasoning">{{ dim.content }}</p>
+              </article>
+            </div>
+
+            <template v-if="llmFundamental.risks.length">
+              <h4 class="match-detail__section-title">风险提示</h4>
+              <ul class="match-detail__risks">
+                <li v-for="risk in llmFundamental.risks" :key="risk">
+                  <span class="match-detail__risk-icon" aria-hidden="true">⚠</span>
+                  {{ risk }}
+                </li>
+              </ul>
+            </template>
+          </template>
+
+          <p v-else class="match-detail__hint">
+            点击“生成基本面分析”,大模型将从近期状态、主客场表现、攻防效率、
+            战意与动机、历史交锋等维度输出基本面研判。
           </p>
         </div>
 
@@ -787,6 +912,55 @@ async function loadSavedAnalysis(): Promise<void> {
     font-size: vars.$font-size-sm;
     line-height: 1.6;
     color: vars.$color-text-secondary;
+  }
+
+  &__llm-dimensions {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: vars.$spacing-md;
+  }
+
+  &__llm-dim {
+    display: flex;
+    flex-direction: column;
+    gap: vars.$spacing-sm;
+    padding: vars.$spacing-md;
+    background: vars.$color-surface;
+    border: 1px solid vars.$color-border;
+    border-radius: vars.$border-radius;
+  }
+
+  &__llm-dim-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: vars.$spacing-sm;
+  }
+
+  &__llm-dim-title {
+    font-weight: 600;
+  }
+
+  &__llm-edge {
+    padding: 2px vars.$spacing-sm;
+    border-radius: vars.$border-radius;
+    font-size: vars.$font-size-sm;
+    white-space: nowrap;
+
+    &--home {
+      background: rgba(34, 139, 34, 0.12);
+      color: vars.$color-positive;
+    }
+
+    &--away {
+      background: rgba(30, 100, 190, 0.12);
+      color: #1e64be;
+    }
+
+    &--even {
+      background: vars.$color-surface-hover;
+      color: vars.$color-text-secondary;
+    }
   }
 
   &__table {

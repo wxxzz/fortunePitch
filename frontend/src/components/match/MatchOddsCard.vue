@@ -5,6 +5,7 @@
  * 选项勾选状态由 selection store 全局管理,底部选注栏联动。
  */
 import { computed, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import type { MatchGame } from '@/api/match/game'
 import { useSelectionStore } from '@/stores/selection'
 
@@ -19,8 +20,15 @@ const emit = defineEmits<{
   (e: 'open-detail', matchId: string): void
 }>()
 
+const router = useRouter()
+
 const selectionStore = useSelectionStore()
 const { isSelected } = selectionStore
+
+/** 点击球队名称进入球队看板页 */
+function openTeamDashboard(teamId: number): void {
+  void router.push(`/base/team-dashboard/${teamId}`)
+}
 
 const statusLabel: Record<string, string> = {
   PENDING: '未开',
@@ -95,12 +103,26 @@ function isSelectedOption(optionCode: string): boolean {
         </button>
       </div>
       <div class="odds-card__teams">
-        <span class="odds-card__team">{{ homeName }}</span>
+        <button
+          class="odds-card__team-btn"
+          type="button"
+          :title="`${homeName} 球队看板`"
+          @click="openTeamDashboard(game.home_team_id)"
+        >
+          {{ homeName }}
+        </button>
         <span v-if="game.home_score !== null" class="odds-card__score">
           {{ game.home_score }} : {{ game.away_score }}
         </span>
         <span v-else class="odds-card__vs">VS</span>
-        <span class="odds-card__team">{{ awayName }}</span>
+        <button
+          class="odds-card__team-btn"
+          type="button"
+          :title="`${awayName} 球队看板`"
+          @click="openTeamDashboard(game.away_team_id)"
+        >
+          {{ awayName }}
+        </button>
       </div>
     </header>
 
@@ -211,11 +233,26 @@ function isSelectedOption(optionCode: string): boolean {
     padding: vars.$spacing-xs 0;
   }
 
-  &__team {
+  &__team-btn {
     flex: 1;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: inherit;
     text-align: center;
     font-size: 17px;
     font-weight: 600;
+    cursor: pointer;
+    transition: text-decoration-color 0.2s;
+    // 悬停显示下划线提示可点击进入球队看板
+    text-decoration: underline;
+    text-decoration-color: transparent;
+
+    &:hover,
+    &:focus-visible {
+      text-decoration-color: rgba(255, 255, 255, 0.85);
+    }
+
     @media (max-width: 600px) {
       font-size: 15px;
     }

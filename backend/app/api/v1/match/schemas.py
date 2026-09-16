@@ -107,6 +107,37 @@ class LlmAnalysisRead(BaseModel):
     created_at: datetime.datetime = Field(description="生成时间")
 
 
+# ---------- 大模型基本面分析 ----------
+
+
+class LlmFundamentalDimensionRead(BaseModel):
+    """单个基本面维度结论响应模型。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    code: str = Field(description="维度编码,如 RECENT_FORM")
+    title: str = Field(description="维度展示名,如 近期状态")
+    edge: str = Field(description="优劣倾向:home=主队占优 / away=客队占优 / even=势均力敌")
+    content: str = Field(description="维度分析结论")
+
+
+class LlmFundamentalAnalysisRead(BaseModel):
+    """大模型基本面分析结果响应模型(整体研判 + 六维度结论 + 风险提示)。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    analysis_id: int = Field(description="分析记录 ID(落库主键)")
+    match_id: str
+    provider: str = Field(description="服务商:qwen / ark")
+    model: str = Field(description="实际使用的模型名")
+    summary: str = Field(description="整体研判")
+    dimensions: list[LlmFundamentalDimensionRead] = Field(
+        description="六维度结论,按 近期状态/主客场表现/攻防效率/战意与动机/历史交锋/其他相关因素 顺序"
+    )
+    risks: list[str] = Field(default_factory=list, description="风险提示")
+    created_at: datetime.datetime = Field(description="生成时间")
+
+
 # ---------- 赛果开奖 ----------
 
 class MatchResultRead(BaseModel):
