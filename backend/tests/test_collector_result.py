@@ -195,10 +195,28 @@ async def session_factory() -> typing.AsyncGenerator[async_sessionmaker, None]: 
             session.add(team)
             await session.flush()
             team_ids[name] = team.team_id
-        for match_id, match_time, home, away in (
-            ("2041028", datetime.datetime(2026, 8, 24, 20, 0), "巴塞罗那", "皇家马德里"),
-            ("2041030", datetime.datetime(2026, 8, 25, 1, 30), "巴塞罗那", "桑坦德竞技"),
-            ("2041031", datetime.datetime(2026, 8, 24, 22, 0), "皇家马德里", "桑坦德竞技"),
+        for match_id, match_time, business_date, home, away in (
+            (
+                "2041028",
+                datetime.datetime(2026, 8, 24, 20, 0),
+                datetime.date(2026, 8, 24),
+                "巴塞罗那",
+                "皇家马德里",
+            ),
+            (
+                "2041030",
+                datetime.datetime(2026, 8, 25, 1, 30),
+                datetime.date(2026, 8, 24),
+                "巴塞罗那",
+                "桑坦德竞技",
+            ),
+            (
+                "2041031",
+                datetime.datetime(2026, 8, 24, 22, 0),
+                datetime.date(2026, 8, 24),
+                "皇家马德里",
+                "桑坦德竞技",
+            ),
         ):
             session.add(
                 MatchGame(
@@ -207,6 +225,7 @@ async def session_factory() -> typing.AsyncGenerator[async_sessionmaker, None]: 
                     home_team_id=team_ids[home],
                     away_team_id=team_ids[away],
                     match_time=match_time,
+                    business_date=business_date,
                     match_status=MatchStatus.PENDING,
                 )
             )
@@ -266,19 +285,45 @@ class TestResultSync:
         async with session_factory() as session:
             assert len((await session.scalars(select(MatchResult))).all()) == 2
 
-    async def test_list_results_by_date_filters_and_orders(
+    async def test_sync_by_sale_date_covers_next_day(
         self, session_factory: async_sessionmaker
     ) -> None:
+        """售卖日口径:同时拉取该日与次日的赛果,凌晨场一并入库。"""
         async with session_factory() as session:
-            await result_sync.sync_results_by_date(session, "2026-08-24")
+            result = await result_sync.sync_results_by_date(
+                session, "2026-08-24", date_type="sale"
+            )
+            await session.commit()
+
+        # 08-24 三条 + 08-25 一条(2041030),去重后共 4 条
+        assert result.day_result_count == 4
+        assert result.created_count == 3
+        assert result.updated_count == 0
+        assert result.game_updated_count == 2
+        assert len(result.skipped_matches) == 1
+        async with session_factory() as session:
+            assert await session.get(MatchResult, "2041030") is not None
+
+    async def test_list_results_by_business_date_includes_next_day_matches(
+        self, session_factory: async_sessionmaker
+    ) -> None:
+        """售卖日查询:次日凌晨开赛的场次归属前一售卖日。"""
+        async with session_factory() as session:
+            await result_sync.sync_results_by_date(
+                session, "2026-08-24", date_type="sale"
+            )
             await session.commit()
         async with session_factory() as session:
-            pairs = await result_sync.list_results_by_date(
+            pairs = await result_sync.list_results_by_business_date(
                 session, datetime.date(2026, 8, 24)
             )
 
-        # 2041030 开赛时间为次日 01:30,不计入 08-24
-        assert [result.match_id for result, _ in pairs] == ["2041028", "2041031"]
+        # 2041030 开赛时间为次日 01:30,售卖日仍为 08-24,计入
+        assert [result.match_id for result, _ in pairs] == [
+            "2041028",
+            "2041030",
+            "2041031",
+        ]
         record, game = pairs[0]
         assert game.league.league_name == "西班牙甲级联赛"
         assert game.home_team.team_name == "巴塞罗那"
@@ -339,7 +384,7 @@ class TestResultAPI:
     async def test_list_results_endpoint(self, client: AsyncClient) -> None:
         await client.post(
             "/api/v1/collector/results/sync",
-            json={"date": "2026-08-24"},
+            json={"date": "2026-08-24", "date_type": "sale"},
             headers=HEADERS,
         )
         response = await client.get(
@@ -349,7 +394,12 @@ class TestResultAPI:
         )
         assert response.status_code == 200
         results = response.json()
-        assert [r["match_id"] for r in results] == ["2041028", "2041031"]
+        # 售卖日 08-24 含次日凌晨的 2041030,按场次编号排序
+        assert [r["match_id"] for r in results] == [
+            "2041028",
+            "2041030",
+            "2041031",
+        ]
         first = results[0]
         assert first["match_num_str"] == "周一001"
         assert first["league_name"] == "西班牙甲级联赛"
@@ -363,7 +413,7 @@ class TestResultAPI:
         assert first["sp_a"] == 3.08
         assert first["pool_status"] == "Payout"
         # 取消场次比分与玩法结果为空,保留状态
-        cancelled = results[1]
+        cancelled = results[2]
         assert cancelled["full_score"] is None
         assert cancelled["had"] is None
         assert cancelled["pool_status"] == "Cancelled"

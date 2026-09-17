@@ -1,6 +1,7 @@
 """数据采集模块 Pydantic Schema:联赛 / 球队 / 球员 / 赛事同步。"""
 
 import datetime
+import typing
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -108,11 +109,18 @@ class MatchSyncResultRead(BaseModel):
 
 
 class ResultSyncRequest(BaseModel):
-    """同步请求体:按比赛日拉取竞彩赛果开奖数据。"""
+    """同步请求体:按比赛日或售卖日拉取竞彩赛果开奖数据。"""
 
     date: datetime.date = Field(
-        description="比赛日(YYYY-MM-DD),与赛果开奖页的日期选择一致",
+        description="日期(YYYY-MM-DD),与所选 date_type 口径一致",
         examples=["2026-08-25"],
+    )
+    date_type: typing.Literal["match", "sale"] = Field(
+        default="match",
+        description=(
+            "日期口径:match=比赛日(与赛果开奖页的日期选择一致);"
+            "sale=售卖日(同时拉取该日与次日的赛果,覆盖次日凌晨场)"
+        ),
     )
 
 

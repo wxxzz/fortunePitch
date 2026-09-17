@@ -331,16 +331,19 @@ async def list_llm_odds_trends(
 
 # ---------- 赛果开奖 /results ----------
 
-@router.get("/results", response_model=list[MatchResultRead], summary="按比赛日查询赛果开奖")
+@router.get(
+    "/results", response_model=list[MatchResultRead], summary="按售卖日查询赛果开奖"
+)
 async def list_results(
-    date: datetime.date = Query(description="比赛日(YYYY-MM-DD)"),
+    date: datetime.date = Query(description="售卖日(YYYY-MM-DD),与赛事中心口径一致"),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[MatchResultRead]:
-    """查询指定比赛日的赛果开奖列表(含各玩法开奖结果与 SP)。
+    """查询指定售卖日的赛果开奖列表(含各玩法开奖结果与 SP)。
 
-    数据由采集模块的赛果同步写入,未同步的日期返回空列表。
+    按比赛的竞彩售卖日(fp_match_games.business_date)过滤,次日凌晨开赛的
+    比赛归属前一售卖日。数据由采集模块的赛果同步写入,未同步的日期返回空列表。
     """
-    pairs = await result_sync.list_results_by_date(session, date)
+    pairs = await result_sync.list_results_by_business_date(session, date)
     return [
         MatchResultRead(
             match_id=result.match_id,

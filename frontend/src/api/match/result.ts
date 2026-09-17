@@ -30,7 +30,7 @@ export interface MatchResultItem {
   pool_status: string
 }
 
-/** 按比赛日查询赛果开奖列表(未同步的日期返回空列表) */
+/** 按售卖日查询赛果开奖列表(与赛事中心口径一致,未同步的日期返回空列表) */
 export async function listMatchResults(date: string): Promise<MatchResultItem[]> {
   const { data } = await request.get<MatchResultItem[]>('/api/v1/match/results', {
     params: { date },

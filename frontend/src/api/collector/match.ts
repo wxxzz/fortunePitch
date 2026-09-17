@@ -40,11 +40,18 @@ export interface ResultSyncResult {
   source: string
 }
 
-/** 按比赛日同步竞彩赛果开奖数据(来源:中国竞彩网赛果开奖页) */
-export async function syncResults(date: string): Promise<ResultSyncResult> {
+/**
+ * 同步竞彩赛果开奖数据(来源:中国竞彩网赛果开奖页)。
+ * @param dateType match=比赛日(默认,与赛果开奖页日期一致);sale=售卖日
+ *   (同时拉取该日与次日的赛果,覆盖次日凌晨场,与赛事中心口径一致)
+ */
+export async function syncResults(
+  date: string,
+  dateType: 'match' | 'sale' = 'match',
+): Promise<ResultSyncResult> {
   const { data } = await request.post<ResultSyncResult>(
     '/api/v1/collector/results/sync',
-    { date },
+    { date, date_type: dateType },
   )
   return data
 }

@@ -588,6 +588,37 @@ class TestTeamDashboardSync:
                     session, team_id=team.team_id
                 )
 
+    async def test_sync_cup_team_reuses_same_name_profile(
+        self, session_factory: async_sessionmaker, barca_team_id: int
+    ) -> None:
+        """杯赛联赛下的同名球队行缺档案时,借用国内联赛行的档案映射。"""
+        async with session_factory() as session:
+            cup_league = League(league_name="欧冠", country="欧洲")
+            session.add(cup_league)
+            await session.flush()
+            cup_team = Team(team_name="巴塞罗那", league_id=cup_league.league_id)
+            session.add(cup_team)
+            await session.flush()
+            cup_team_id = cup_team.team_id
+
+            result = await team_dashboard_sync.sync_team_dashboard(
+                session, team_id=cup_team_id
+            )
+            await session.commit()
+
+        # uniform_team_id 复用西甲巴塞罗那行的档案;比赛挂在杯赛球队行下
+        assert result.uniform_team_id == UNIFORM_TEAM_ID
+        assert result.team.team_id == cup_team_id
+        assert result.created_count == 7
+        # 档案已被西甲行持有,杯赛行不会新建冲突档案
+        assert result.profile_created is False
+        assert await session.get(TeamProfile, cup_team_id) is None
+
+        async with session_factory() as session:
+            matches = (await session.scalars(select(TeamMatch))).all()
+            assert len(matches) == 7
+            assert {m.team_id for m in matches} == {cup_team_id}
+
     async def test_team_sync_persists_profile(
         self, session_factory: async_sessionmaker
     ) -> None:

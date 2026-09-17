@@ -202,18 +202,22 @@ async def sync_team_dashboard(
     "/results/sync",
     response_model=ResultSyncResultRead,
     status_code=status.HTTP_200_OK,
-    summary="按比赛日同步竞彩赛果开奖数据",
+    summary="按比赛日或售卖日同步竞彩赛果开奖数据",
 )
 async def sync_results(
     payload: ResultSyncRequest, session: AsyncSession = Depends(get_db_session)
 ) -> ResultSyncResultRead:
-    """从中国竞彩网赛果开奖页拉取指定比赛日的开奖结果并入库。
+    """从中国竞彩网赛果开奖页拉取开奖结果并入库。
 
     数据来源:https://www.sporttery.cn/jc/zqsgkj/
+    date_type=match 按比赛日拉取(与赛果开奖页的日期一致);date_type=sale
+    按售卖日拉取(同时覆盖该日与次日凌晨的场次,与赛事中心口径一致)。
     场次须已在赛事档案中,未入库的场次在结果中列出;
     比分有效的场次会同步回写比赛比分与完赛状态。
     """
-    result = await result_sync.sync_results_by_date(session, payload.date.isoformat())
+    result = await result_sync.sync_results_by_date(
+        session, payload.date.isoformat(), date_type=payload.date_type
+    )
     return ResultSyncResultRead(
         date=result.date,
         day_result_count=result.day_result_count,

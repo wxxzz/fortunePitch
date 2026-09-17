@@ -97,12 +97,33 @@ async def upsert_team_profile(
     return False
 
 
+async def _find_same_name_profile(
+    session: AsyncSession, team: Team
+) -> TeamProfile | None:
+    """查找同名球队(任意联赛)持有的档案映射。
+
+    杯赛联赛下的球队行因 uniform_team_id 唯一约束拿不到自己的档案时,
+    借用同名俱乐部在国内联赛行下的映射。
+    """
+    return await session.scalar(
+        select(TeamProfile)
+        .join(Team, Team.team_id == TeamProfile.team_id)
+        .where(Team.team_name == team.team_name, Team.team_id != team.team_id)
+        .limit(1)
+    )
+
+
 async def _resolve_dashboard_team(
     session: AsyncSession,
     team_id: int | None,
     uniform_team_id: int | None,
 ) -> tuple[Team, int]:
     """解析看板球队,返回 (本地球队, 竞彩网统一球队 ID)。
+
+    本地球队按 (联赛, 球队名) 建档,同一俱乐部征战杯赛时会在杯赛联赛下
+    另建一行;而档案映射的 uniform_team_id 唯一,只能挂在其中一个球队行下
+    (通常是国内联赛行)。因此球队行缺档案时,回退查同名球队(其他联赛)
+    的档案,复用其 uniform_team_id。
 
     Raises:
         DataValidationError: 两个 ID 同时提供/均未提供,或映射缺失。
@@ -116,9 +137,12 @@ async def _resolve_dashboard_team(
             raise ResourceNotFoundError("球队", str(team_id))
         profile = await session.get(TeamProfile, team_id)
         if profile is None:
+            profile = await _find_same_name_profile(session, team)
+        if profile is None:
             raise DataValidationError(
                 "该球队尚未同步竞彩网档案(uniform_team_id 缺失),"
-                "请先在数据采集页同步对应联赛的球队清单"
+                "请先在数据采集页同步对应联赛(或其他同名球队所在联赛)"
+                "的球队清单"
             )
         return team, int(profile.uniform_team_id)
     profile = await session.scalar(

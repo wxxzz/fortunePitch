@@ -1,10 +1,12 @@
 <script setup lang="ts">
 /**
- * 赛果开奖页:按比赛日展示竞彩各玩法开奖结果。
+ * 赛果开奖页:按售卖日展示竞彩各玩法开奖结果。
  *
  * 参考中国竞彩网赛果开奖页(sporttery.cn/jc/zqsgkj)的表格口径:
  * 编号 / 联赛 / 对阵(含让球盘口) / 半场 / 全场 / 5 种玩法开奖结果 / 胜平负 SP。
- * 数据由数据采集页的"同步赛果"写入;页内也提供快捷同步入口。
+ * 查询口径与赛事中心一致:按竞彩售卖日过滤,次日凌晨开赛的比赛归属前一售卖日。
+ * 数据由数据采集页的"同步赛果"写入;页内也提供快捷同步入口
+ * (售卖日口径,会同时拉取当日与次日的赛果)。
  */
 import { computed, onMounted, ref } from 'vue'
 import {
@@ -13,6 +15,7 @@ import {
 } from '@/api/match/result'
 import { syncResults, type ResultSyncResult } from '@/api/collector/match'
 
+/** 售卖日期(YYYY-MM-DD),默认今天,与赛事中心的口径一致 */
 const selectedDate = ref(todayIso())
 const results = ref<MatchResultItem[]>([])
 const isLoading = ref(false)
@@ -44,13 +47,13 @@ async function fetchResults(): Promise<void> {
   }
 }
 
-/** 快捷同步:拉取当日赛果后刷新列表 */
+/** 快捷同步:按售卖日拉取当日与次日赛果后刷新列表 */
 async function handleSync(): Promise<void> {
   if (!canSubmitResult.value) return
   isSyncing.value = true
   errorMessage.value = ''
   try {
-    syncOutcome.value = await syncResults(selectedDate.value)
+    syncOutcome.value = await syncResults(selectedDate.value, 'sale')
     await fetchResults()
   } catch (err) {
     errorMessage.value = err instanceof Error ? err.message : '赛果同步失败'
@@ -77,13 +80,14 @@ onMounted(() => {
       <h2 class="results__title">赛果开奖</h2>
       <p class="results__subtitle">
         数据来源:中国竞彩网赛果开奖页(sporttery.cn/jc/zqsgkj)。
+        按售卖日展示(与赛事中心口径一致,次日凌晨开赛的比赛归属前一售卖日);
         比分与玩法结果由同步赛果写入,取消场次保留状态不展示比分。
       </p>
     </header>
 
     <div class="results__toolbar">
       <label class="results__filter">
-        <span>比赛日期</span>
+        <span>售卖日期</span>
         <input
           v-model="selectedDate"
           class="results__date-input"
