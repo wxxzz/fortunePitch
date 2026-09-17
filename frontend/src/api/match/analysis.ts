@@ -126,3 +126,36 @@ export async function getLlmTrendAnalysis(matchId: string): Promise<LlmTrendAnal
   )
   return data
 }
+
+/** AI 分析结果查询行(推荐 + 比赛上下文) */
+export interface LlmRecommendationRow {
+  analysis_id: number
+  match_id: string
+  league_name: string | null
+  match_time: string
+  business_date: string | null
+  home_team_name: string | null
+  away_team_name: string | null
+  play_code: string
+  play_name: string
+  recommendation: string
+  confidence: number
+  reasoning: string
+  alternatives: string[]
+  created_at: string
+}
+
+/** 按售卖日查询各场比赛最近一次 AI 分析的分玩法推荐(置信度倒序) */
+export async function listLlmRecommendations(
+  params: {
+    business_date: string
+    min_confidence?: number
+    play_code?: string
+  },
+): Promise<LlmRecommendationRow[]> {
+  const { data } = await request.get<LlmRecommendationRow[]>(
+    '/api/v1/match/llm-recommendations',
+    { params },
+  )
+  return data
+}

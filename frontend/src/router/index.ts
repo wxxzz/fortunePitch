@@ -57,6 +57,11 @@ const router = createRouter({
       name: 'user-dashboard',
       component: () => import('@/views/retrospect/UserDashboardView.vue'),
     },
+    {
+      path: '/ai-analysis',
+      name: 'ai-analysis',
+      component: () => import('@/views/match/AiAnalysisView.vue'),
+    },
   ],
 })
 

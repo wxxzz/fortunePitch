@@ -181,6 +181,27 @@ class LlmTrendAnalysisRead(BaseModel):
     created_at: datetime.datetime = Field(description="生成时间")
 
 
+# ---------- AI 分析结果查询 ----------
+
+class LlmRecommendationRowRead(BaseModel):
+    """AI 分析结果查询行的响应模型(推荐 + 比赛上下文)。"""
+
+    analysis_id: int = Field(description="所属分析记录 ID(每场取最近一次)")
+    match_id: str = Field(description="比赛编号")
+    league_name: str | None = Field(description="联赛名称")
+    match_time: datetime.datetime = Field(description="开赛时间")
+    business_date: datetime.date | None = Field(description="竞彩售卖日")
+    home_team_name: str | None = Field(description="主队名称")
+    away_team_name: str | None = Field(description="客队名称")
+    play_code: str = Field(description="玩法编码:HAD/HHAD/CRS/TTG/HAFU")
+    play_name: str = Field(description="玩法展示名,如 胜平负")
+    recommendation: str = Field(description="推荐选项,如 主胜 / 1:2 / 3球 / 胜胜")
+    confidence: float = Field(description="置信度,0~1")
+    reasoning: str = Field(description="推荐依据")
+    alternatives: list[str] = Field(default_factory=list, description="次选选项")
+    created_at: datetime.datetime = Field(description="分析生成时间")
+
+
 # ---------- 赛果开奖 ----------
 
 class MatchResultRead(BaseModel):

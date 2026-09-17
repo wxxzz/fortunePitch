@@ -13,6 +13,7 @@ const NAV_ITEMS = [
   { label: '赛事中心', route: '/match', icon: '⚽' },
   { label: '赛果开奖', route: '/results', icon: '🏆' },
   { label: '球队档案', route: '/teams', icon: '🛡' },
+  { label: 'AI 分析', route: '/ai-analysis', icon: '🤖' },
   { label: '策略推荐', route: '/strategy', icon: '📈' },
   { label: '数据模型', route: '/model', icon: '🧮' },
   { label: '我的复盘', route: '/retrospect', icon: '📒' },

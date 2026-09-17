@@ -10,6 +10,7 @@ from sqlalchemy.orm import selectinload
 from app.api.v1.match.schemas import (
     LlmAnalysisRead,
     LlmFundamentalAnalysisRead,
+    LlmRecommendationRowRead,
     LlmTrendAnalysisRead,
     MatchEventCreate,
     MatchEventRead,
@@ -30,7 +31,7 @@ from app.models import (
     MatchOddsSnapshot,
     MatchStatus,
 )
-from app.services import crud, llm, llm_fundamental, llm_odds_trend
+from app.services import crud, llm, llm_fundamental, llm_odds_trend, llm_query
 
 router = APIRouter(prefix="/match", tags=["match"], dependencies=[Depends(verify_api_key)])
 
@@ -205,6 +206,62 @@ async def list_llm_analyses(
         LlmAnalysisRead.model_validate(row)
         for row in await llm.list_match_analyses(session, match_id)
     ]
+
+
+@router.get(
+    "/llm-recommendations",
+    response_model=list[LlmRecommendationRowRead],
+    summary="AI 分析结果查询(按售卖日/置信度/玩法)",
+)
+async def list_llm_recommendations(
+    business_date: datetime.date | None = Query(
+        default=None, description="竞彩售卖日,缺省为当天"
+    ),
+    min_confidence: float = Query(
+        default=0.0, ge=0.0, le=1.0, description="置信度下限(含)"
+    ),
+    play_code: str | None = Query(
+        default=None, description="玩法编码过滤,缺省返回全部五种玩法"
+    ),
+    session: AsyncSession = Depends(get_db_session),
+) -> list[LlmRecommendationRowRead]:
+    """按售卖日查询各场比赛最近一次 AI 分析的分玩法推荐。
+
+    每场比赛仅取最近一次分析(历史多份时以最新为准),
+    输出比赛场次/主客队/玩法推荐/置信度/依据,按置信度倒序。
+    结果为数据分析参考,不构成投注建议。
+
+    Raises:
+        DataValidationError: 玩法编码非法。
+    """
+    recs = await llm_query.query_play_recommendations(
+        session,
+        business_date=business_date or llm_query.current_business_date(),
+        min_confidence=min_confidence,
+        play_code=play_code,
+    )
+    rows: list[LlmRecommendationRowRead] = []
+    for rec in recs:
+        game = rec.analysis.game
+        rows.append(
+            LlmRecommendationRowRead(
+                analysis_id=rec.analysis.analysis_id,
+                match_id=game.match_id,
+                league_name=game.league.league_name if game.league else None,
+                match_time=game.match_time,
+                business_date=game.business_date,
+                home_team_name=game.home_team.team_name if game.home_team else None,
+                away_team_name=game.away_team.team_name if game.away_team else None,
+                play_code=rec.play_code,
+                play_name=rec.play_name,
+                recommendation=rec.recommendation,
+                confidence=rec.confidence,
+                reasoning=rec.reasoning,
+                alternatives=rec.alternatives,
+                created_at=rec.analysis.created_at,
+            )
+        )
+    return rows
 
 
 @router.post(
