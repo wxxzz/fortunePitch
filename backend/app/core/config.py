@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     # 千问(默认服务商),OpenAI 兼容协议
     LLM_QWEN_BASE_URL: str = "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
     LLM_QWEN_API_KEY: str = ""
-    LLM_QWEN_MODEL: str = "qwen3.7-plus"
+    LLM_QWEN_MODEL: str = "qwen3.8-max"
     # 火山引擎方舟,OpenAI 兼容协议(模型 glm-5.2 在方舟侧的 ID)
     LLM_ARK_BASE_URL: str = "https://ark.cn-beijing.volces.com/api/coding/v3"
     LLM_ARK_API_KEY: str = ""
