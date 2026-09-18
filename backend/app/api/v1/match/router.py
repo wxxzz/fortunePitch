@@ -70,13 +70,18 @@ async def list_games(
     """分页查询比赛列表(含在售玩法赔率),支持按售卖日范围过滤。
 
     售卖日与竞彩官网日期一致:次日凌晨开赛的比赛归属前一售卖日。
+    默认按场次编号(如 周二002)升序,无编号的场次排最后(按开赛时间兜底)。
     """
     stmt = select(MatchGame).options(selectinload(MatchGame.odds))
     if start_date is not None:
         stmt = stmt.where(MatchGame.business_date >= start_date)
     if end_date is not None:
         stmt = stmt.where(MatchGame.business_date <= end_date)
-    stmt = stmt.order_by(MatchGame.match_time).offset(offset).limit(limit)
+    stmt = stmt.order_by(
+        MatchGame.match_num_str == "",
+        MatchGame.match_num_str,
+        MatchGame.match_time,
+    ).offset(offset).limit(limit)
     result = await session.execute(stmt)
     return list(result.scalars().all())
 

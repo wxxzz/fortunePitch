@@ -31,6 +31,8 @@ export interface MatchOdds {
 /** 比赛基础信息 */
 export interface MatchGame {
   match_id: string
+  /** 场次编号,如 周二002(赛事同步自竞彩网,缺失时为空串) */
+  match_num_str: string
   league_id: number
   home_team_id: number
   away_team_id: number
@@ -46,6 +48,7 @@ export interface MatchGame {
 /** 创建比赛参数 */
 export interface MatchGameCreateParams {
   match_id: string
+  match_num_str?: string
   league_id: number
   home_team_id: number
   away_team_id: number

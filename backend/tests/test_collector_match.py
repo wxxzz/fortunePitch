@@ -173,6 +173,7 @@ class TestParsers:
         fields = match_parser.build_match_fields(SAMPLE_MATCHES[1])
         assert fields == {
             "match_id": "2041030",
+            "match_num_str": "周一004",
             "match_time": datetime.datetime(2026, 8, 25, 1, 30),
             # 次日凌晨开赛,售卖日仍是前一天
             "business_date": datetime.date(2026, 8, 24),
@@ -181,6 +182,13 @@ class TestParsers:
             "away_team_name": "桑坦德竞技",
             "match_status": MatchStatus.PENDING,
         }
+
+    def test_build_match_fields_defaults_empty_num(self) -> None:
+        # matchNumStr 缺失时场次编号为空串(不影响其余字段)
+        sub = {k: v for k, v in SAMPLE_MATCHES[0].items() if k != "matchNumStr"}
+        fields = match_parser.build_match_fields(sub)
+        assert fields["match_id"] == "2041028"
+        assert fields["match_num_str"] == ""
 
     def test_build_business_date_missing(self) -> None:
         assert match_parser.build_business_date({"matchId": 1}) is None
@@ -325,10 +333,13 @@ class TestMatchSync:
             assert game.match_status == MatchStatus.PENDING
             assert game.match_time == datetime.datetime(2026, 8, 24, 20, 0)
             assert game.home_score is None
+            # 场次编号随赛程同步落库
+            assert game.match_num_str == "周一001"
             # 售卖日落库:次日凌晨开赛的 2041030 仍归属 8-24 售卖日
             assert game.business_date == datetime.date(2026, 8, 24)
             late_game = await session.get(MatchGame, "2041030")
             assert late_game is not None
+            assert late_game.match_num_str == "周一004"
             assert late_game.match_time == datetime.datetime(2026, 8, 25, 1, 30)
             assert late_game.business_date == datetime.date(2026, 8, 24)
 
@@ -596,6 +607,41 @@ class TestSyncAPI:
         assert with_odds["odds"]["pools"][1]["goalLine"] == "-1"
         # 未同步赔率的场次 odds 为空
         assert by_id["2041030"]["odds"] is None
+
+    async def test_list_games_orders_by_match_num_str(
+        self, client: AsyncClient, session_factory: async_sessionmaker
+    ) -> None:
+        await client.post(
+            "/api/v1/collector/matches/sync",
+            json={"date": "2026-08-24"},
+            headers=HEADERS,
+        )
+        # 手工场次无编号(编号为空串),应排在有编号场次之后
+        async with session_factory() as session:
+            league = await session.scalar(select(League))
+            team = await session.scalar(select(Team))
+            session.add(
+                MatchGame(
+                    match_id="m-manual-1",
+                    league_id=league.league_id,
+                    home_team_id=team.team_id,
+                    away_team_id=team.team_id,
+                    match_time=datetime.datetime(2026, 8, 24, 19, 0),
+                    business_date=datetime.date(2026, 8, 24),
+                )
+            )
+            await session.commit()
+
+        response = await client.get(
+            "/api/v1/match/games", params={"limit": 50}, headers=HEADERS
+        )
+        assert response.status_code == 200
+        games = response.json()
+        # 默认按场次编号升序:周一001 -> 周一004 -> 无编号手工场次
+        assert [g["match_id"] for g in games] == [
+            "2041028", "2041030", "m-manual-1",
+        ]
+        assert [g["match_num_str"] for g in games] == ["周一001", "周一004", ""]
 
     async def test_list_games_filters_by_business_date(
         self, client: AsyncClient

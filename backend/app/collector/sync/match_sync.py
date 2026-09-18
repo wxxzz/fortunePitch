@@ -106,6 +106,7 @@ async def sync_matches_by_date(session: AsyncSession, date: str) -> MatchSyncRes
         if game is None:
             game = MatchGame(
                 match_id=fields["match_id"],
+                match_num_str=fields["match_num_str"],
                 league_id=league.league_id,
                 home_team_id=home_team.team_id,
                 away_team_id=away_team.team_id,
@@ -116,7 +117,8 @@ async def sync_matches_by_date(session: AsyncSession, date: str) -> MatchSyncRes
             session.add(game)
             created_count += 1
         else:
-            # 只刷新开赛时间与售卖日;状态与比分由赛果数据维护,不做降级
+            # 只刷新场次编号/开赛时间/售卖日;状态与比分由赛果数据维护,不做降级
+            game.match_num_str = fields["match_num_str"]
             game.match_time = fields["match_time"]
             game.business_date = fields["business_date"]
             updated_count += 1

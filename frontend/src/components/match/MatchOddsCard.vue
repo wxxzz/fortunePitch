@@ -84,7 +84,9 @@ function isSelectedOption(optionCode: string): boolean {
     <header class="odds-card__header">
       <div class="odds-card__meta">
         <span class="odds-card__league">{{ leagueName || '未知联赛' }}</span>
-        <span class="odds-card__num">编号 {{ game.match_id }}</span>
+        <span class="odds-card__num">
+          {{ game.match_num_str || `编号 ${game.match_id}` }}
+        </span>
         <span class="odds-card__time">
           {{ new Date(game.match_time).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) }}
         </span>

@@ -48,6 +48,7 @@ def build_match_fields(sub: dict[str, typing.Any]) -> dict[str, typing.Any]:
     Returns:
         字段字典:
         - ``match_id``: 竞彩网比赛 ID(字符串,作 fp_match_games 主键)
+        - ``match_num_str``: 场次编号,如"周二002"(缺失时为空串)
         - ``match_time``: 开赛时间(matchDate + matchTime 组合,本地时区)
         - ``league_name`` / ``home_team_name`` / ``away_team_name``: 全称,
           与基础档案的 league_name / team_name 对齐
@@ -68,6 +69,7 @@ def build_match_fields(sub: dict[str, typing.Any]) -> dict[str, typing.Any]:
         )
     return {
         "match_id": str(match_id),
+        "match_num_str": str(sub.get("matchNumStr") or "").strip(),
         "match_time": build_match_time(sub),
         "business_date": build_business_date(sub),
         "league_name": league_name,

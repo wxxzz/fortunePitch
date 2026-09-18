@@ -43,6 +43,8 @@ class MatchGame(Base):
 
     # 比赛全局唯一标识(来自外部数据源,故用 VARCHAR 而非自增)
     match_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    # 场次编号,如"周二002"(赛事同步自竞彩网,赛果表另有一份开奖时点快照)
+    match_num_str: Mapped[str] = mapped_column(String(16), nullable=False, default="")
     league_id: Mapped[int] = mapped_column(
         ForeignKey("fp_base_leagues.league_id"), index=True, nullable=False
     )

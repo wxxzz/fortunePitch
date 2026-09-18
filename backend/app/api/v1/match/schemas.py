@@ -13,6 +13,9 @@ class MatchGameCreate(BaseModel):
     """创建比赛请求体。"""
 
     match_id: str = Field(max_length=64, description="比赛全局唯一标识(外部数据源)")
+    match_num_str: str = Field(
+        default="", max_length=16, description="场次编号,如 周二002"
+    )
     league_id: int
     home_team_id: int
     away_team_id: int
@@ -68,6 +71,7 @@ class MatchGameRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     match_id: str
+    match_num_str: str = Field(default="", description="场次编号,如 周二002")
     league_id: int
     home_team_id: int
     away_team_id: int

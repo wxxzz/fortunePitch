@@ -50,23 +50,33 @@ const teamLeagueName = computed(() => {
   return map
 })
 
-/** 应用筛选后的比赛列表 */
+/** 应用筛选后的比赛列表(默认按场次编号升序,编号缺失时按开赛时间兜底) */
 const filteredGames = computed(() =>
-  games.value.filter((game) => {
-    if (selectedLeagueId.value !== null) {
-      const homeLeague = teamLeagueName.value.get(game.home_team_id)
-      if (homeLeague !== leagues.value.find((l) => l.league_id === selectedLeagueId.value)?.league_name) {
-        return false
+  games.value
+    .filter((game) => {
+      if (selectedLeagueId.value !== null) {
+        const homeLeague = teamLeagueName.value.get(game.home_team_id)
+        if (homeLeague !== leagues.value.find((l) => l.league_id === selectedLeagueId.value)?.league_name) {
+          return false
+        }
       }
-    }
-    if (isTopFiveOnly.value) {
-      const leagueName = teamLeagueName.value.get(game.home_team_id) ?? ''
-      if (!TOP_FIVE_KEYWORDS.some((kw) => leagueName.includes(kw))) {
-        return false
+      if (isTopFiveOnly.value) {
+        const leagueName = teamLeagueName.value.get(game.home_team_id) ?? ''
+        if (!TOP_FIVE_KEYWORDS.some((kw) => leagueName.includes(kw))) {
+          return false
+        }
       }
-    }
-    return true
-  }),
+      return true
+    })
+    .slice()
+    .sort((a, b) => {
+      const numA = a.match_num_str
+      const numB = b.match_num_str
+      if (numA && numB && numA !== numB) return numA < numB ? -1 : 1
+      if (numA && !numB) return -1
+      if (!numA && numB) return 1
+      return new Date(a.match_time).getTime() - new Date(b.match_time).getTime()
+    }),
 )
 
 // ---------- 赛事列表 ----------
