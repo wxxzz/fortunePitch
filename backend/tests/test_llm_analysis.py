@@ -309,6 +309,18 @@ class TestBuildAnalysisMessages:
         assert "只输出一个 JSON 对象" in system_text
         assert "playCode" in system_text
 
+    def test_system_prompt_defines_evidence_weights(self) -> None:
+        """系统提示词写明各路证据权重与冲突/缺失处理规则。"""
+        system_text = llm.build_analysis_messages(self._context())[0]["content"]
+        assert "证据权重" in system_text
+        # 自身独立推理 50%(基本面 30% + 赔率 20%),两路 AI 分析各 30%/20%
+        assert "合计 50%" in system_text
+        assert "占 30%" in system_text
+        assert "占 20%" in system_text
+        # 缺失降级与冲突压置信度
+        assert "权重并入自身独立推理" in system_text
+        assert "0.45" in system_text
+
 
 # ---------- 输出解析 ----------
 

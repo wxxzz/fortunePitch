@@ -59,8 +59,10 @@ class Settings(BaseSettings):
     LLM_ARK_API_KEY: str = ""
     LLM_ARK_MODEL: str = "glm-5-2-260617"
     # 单次生成超时与输出上限。注意:GLM 等推理模型的思考过程也计入
-    # max_tokens(实测一场分析约消耗 7k),上限不足会导致 content 为空
-    LLM_TIMEOUT_SECONDS: float = 180.0
+    # max_tokens(实测一场分析约消耗 7k),上限不足会导致 content 为空。
+    # 超时须小于前端 analysis.ts 的 LLM_TIMEOUT_MS(300 秒),
+    # 保证超时先在后端触发并返回明确的 502 错误,而非前端 axios 超时
+    LLM_TIMEOUT_SECONDS: float = 270.0
     LLM_MAX_TOKENS: int = 16000
 
     # CORS 允许的前端来源,逗号分隔

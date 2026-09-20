@@ -3,8 +3,12 @@
  */
 import request from '../request'
 
-/** LLM 生成耗时较长(深度分析 10~30 秒),单独放宽超时 */
-const LLM_TIMEOUT_MS = 120_000
+/**
+ * LLM 生成耗时较长(推理模型深度分析可超 2 分钟),单独放宽超时。
+ * 须大于后端 LLM_TIMEOUT_SECONDS(270 秒):后端先超时并返回明确的
+ * 502 错误信息,这里只兜底网络彻底无响应的情况
+ */
+const LLM_TIMEOUT_MS = 300_000
 
 /** 单种玩法的推荐方案 */
 export interface LlmPlayRecommendation {
@@ -131,6 +135,7 @@ export async function getLlmTrendAnalysis(matchId: string): Promise<LlmTrendAnal
 export interface LlmRecommendationRow {
   analysis_id: number
   match_id: string
+  match_num_str: string
   league_name: string | null
   match_time: string
   business_date: string | null
@@ -139,6 +144,9 @@ export interface LlmRecommendationRow {
   play_code: string
   play_name: string
   recommendation: string
+  recommendation_odds: number | null
+  /** 与 alternatives 按位对齐的最新赔率(未开售或无法解析时为 null) */
+  alternative_odds: (number | null)[]
   confidence: number
   reasoning: string
   alternatives: string[]

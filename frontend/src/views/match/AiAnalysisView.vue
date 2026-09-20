@@ -5,7 +5,7 @@
  * 数据来源为赛事中心深度分析页"AI 分析"落库的结果
  * (每场比赛仅取最近一次分析,历史多份时以最新为准);
  * 五种玩法选项卡(胜平负/让球胜平负/比分/总进球/半全场)展示
- * 比赛场次、主客队、玩法推荐、置信度与依据。
+ * 比赛场次编号、主客队、玩法推荐与备选(附最新赔率,如 主胜@1.63)、置信度与依据。
  * 结果为数据分析参考,不构成投注建议。
  */
 import { computed, onMounted, ref } from 'vue'
@@ -60,6 +60,11 @@ function confidenceTone(confidence: number): 'high' | 'mid' | 'low' {
   if (confidence >= 0.7) return 'high'
   if (confidence >= 0.5) return 'mid'
   return 'low'
+}
+
+/** 选项带最新赔率的展示文案,如 主胜@1.63(未开售时仅显示选项名) */
+function formatOptionWithOdds(label: string, odds: number | null): string {
+  return odds !== null ? `${label}@${odds.toFixed(2)}` : label
 }
 
 /** 开赛时间展示(本地时区,MM-DD HH:mm) */
@@ -117,7 +122,7 @@ onMounted(() => {
       <h2 class="ai-analysis__title">AI 分析结果</h2>
       <p class="ai-analysis__subtitle">
         查询已保存的大模型分析推荐:按售卖日过滤,每场比赛取最近一次分析,
-        输出五种玩法的推荐选项、置信度与依据。结果为数据分析参考,不构成投注建议。
+        输出五种玩法的推荐与备选选项(附最新赔率)、置信度与依据。结果为数据分析参考,不构成投注建议。
       </p>
     </header>
 
@@ -179,6 +184,7 @@ onMounted(() => {
     <table v-if="activeRows.length > 0" class="ai-analysis__table">
       <thead>
         <tr>
+          <th>编号</th>
           <th>联赛 / 开赛</th>
           <th>主队</th>
           <th>客队</th>
@@ -190,6 +196,7 @@ onMounted(() => {
       </thead>
       <tbody>
         <tr v-for="row in activeRows" :key="`${row.match_id}:${row.play_code}`">
+          <td class="ai-analysis__match-num">{{ row.match_num_str || '—' }}</td>
           <td class="ai-analysis__match-cell">
             <button
               class="ai-analysis__match-btn"
@@ -202,7 +209,9 @@ onMounted(() => {
           </td>
           <td class="ai-analysis__team ai-analysis__team--home">{{ row.home_team_name ?? '—' }}</td>
           <td class="ai-analysis__team">{{ row.away_team_name ?? '—' }}</td>
-          <td class="ai-analysis__recommendation">{{ row.recommendation }}</td>
+          <td class="ai-analysis__recommendation">
+            {{ formatOptionWithOdds(row.recommendation, row.recommendation_odds) }}
+          </td>
           <td>
             <span
               class="ai-analysis__confidence"
@@ -212,7 +221,14 @@ onMounted(() => {
             </span>
           </td>
           <td class="ai-analysis__alternatives">
-            {{ row.alternatives.length > 0 ? row.alternatives.join(' / ') : '—' }}
+            <template v-if="row.alternatives.length > 0">
+              {{
+                row.alternatives
+                  .map((alt, index) => formatOptionWithOdds(alt, row.alternative_odds[index] ?? null))
+                  .join(' / ')
+              }}
+            </template>
+            <template v-else>—</template>
           </td>
           <td class="ai-analysis__reasoning">{{ row.reasoning }}</td>
         </tr>
@@ -387,6 +403,12 @@ onMounted(() => {
     }
   }
 
+  &__match-num {
+    white-space: nowrap;
+    font-weight: 600;
+    color: vars.$color-text-primary;
+  }
+
   &__match-cell {
     text-align: left;
   }
@@ -431,6 +453,7 @@ onMounted(() => {
     font-weight: 600;
     color: vars.$color-primary;
     white-space: nowrap;
+    font-variant-numeric: tabular-nums;
   }
 
   &__confidence {

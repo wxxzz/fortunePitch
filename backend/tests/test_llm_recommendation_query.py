@@ -5,7 +5,9 @@
 - 售卖日过滤(其他日期的比赛不出现);
 - 置信度下限过滤(含边界);
 - 玩法编码过滤与非法编码(422);
-- 排序(置信度倒序)与比赛上下文(联赛/主客队)输出。
+- 排序(置信度倒序)与比赛上下文(联赛/主客队)输出;
+- 场次编号与推荐/备选选项最新赔率(含"让球主胜"子串回退匹配)。
+另覆盖 llm_query.resolve_recommendation_odds 的纯函数分支。
 """
 
 import datetime
@@ -19,11 +21,13 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.core.config import get_settings
 from app.core.database import Base, get_db_session
 from app.main import app
+from app.services.llm_query import resolve_recommendation_odds
 from app.models import (
     League,
     MatchGame,
     MatchLlmAnalysis,
     MatchLlmPlayRec,
+    MatchOdds,
     Team,
 )
 
@@ -105,10 +109,11 @@ async def _add_analysis(
 
 
 async def _seed(session_factory: async_sessionmaker) -> None:
-    """预置三场比赛(两场在查询售卖日,一场在其他日期)与分析历史。
+    """预置三场比赛(两场在查询售卖日,一场在其他日期)、在售赔率与分析历史。
 
-    - m-q1:两次分析(旧分析的推荐不应出现在查询结果中);
-    - m-q2:一次分析,胜平负置信度 0.5、让球 0.8;
+    - m-q1:两次分析(旧分析的推荐不应出现在查询结果中),
+      在售赔率仅 HAD(TTG 推荐赔率应为 None);
+    - m-q2:一次分析,胜平负置信度 0.5、让球 0.8,在售 HAD+HHAD;
     - m-q3:其他售卖日,不应出现。
     """
     async with session_factory() as session:
@@ -119,14 +124,15 @@ async def _seed(session_factory: async_sessionmaker) -> None:
         away = Team(team_name="皇家马德里", league_id=league.league_id)
         session.add_all([home, away])
         await session.flush()
-        for match_id, business_date in (
-            ("m-q1", QUERY_DATE),
-            ("m-q2", QUERY_DATE),
-            ("m-q3", OTHER_DATE),
+        for match_id, match_num_str, business_date in (
+            ("m-q1", "周四001", QUERY_DATE),
+            ("m-q2", "周四002", QUERY_DATE),
+            ("m-q3", "", OTHER_DATE),
         ):
             session.add(
                 MatchGame(
                     match_id=match_id,
+                    match_num_str=match_num_str,
                     league_id=league.league_id,
                     home_team_id=home.team_id,
                     away_team_id=away.team_id,
@@ -134,6 +140,54 @@ async def _seed(session_factory: async_sessionmaker) -> None:
                     business_date=business_date,
                 )
             )
+        await session.flush()
+
+        # 当前在售赔率池:m-q1 仅开售 HAD(TTG 未开售,推荐赔率应为 None),
+        # m-q2 开售 HAD + 让球 HHAD(验证"让球主胜"子串回退匹配)
+        session.add(
+            MatchOdds(
+                match_id="m-q1",
+                pools=[
+                    {
+                        "poolCode": "HAD",
+                        "playName": "胜平负",
+                        "options": [
+                            {"code": "h", "label": "主胜", "odds": 2.15},
+                            {"code": "d", "label": "平", "odds": 3.20},
+                            {"code": "a", "label": "客胜", "odds": 3.10},
+                        ],
+                    }
+                ],
+                update_time=datetime.datetime(2026, 9, 16, 10, 0),
+            )
+        )
+        session.add(
+            MatchOdds(
+                match_id="m-q2",
+                pools=[
+                    {
+                        "poolCode": "HAD",
+                        "playName": "胜平负",
+                        "options": [
+                            {"code": "h", "label": "主胜", "odds": 2.30},
+                            {"code": "d", "label": "平", "odds": 3.05},
+                            {"code": "a", "label": "客胜", "odds": 3.10},
+                        ],
+                    },
+                    {
+                        "poolCode": "HHAD",
+                        "playName": "让球胜平负",
+                        "goalLine": "-1",
+                        "options": [
+                            {"code": "hh", "label": "主胜", "odds": 1.85},
+                            {"code": "hd", "label": "平", "odds": 3.40},
+                            {"code": "ha", "label": "客胜", "odds": 4.10},
+                        ],
+                    },
+                ],
+                update_time=datetime.datetime(2026, 9, 16, 10, 0),
+            )
+        )
         await session.flush()
 
         # m-q1 旧分析(高置信度,但应被最新分析覆盖)
@@ -246,6 +300,24 @@ class TestLlmRecommendations:
         assert q1_had["home_team_name"] == "巴塞罗那"
         assert q1_had["away_team_name"] == "皇家马德里"
         assert q1_had["match_time"].startswith("2026-09-17")
+        # 场次编号与推荐/备选选项最新赔率
+        assert q1_had["match_num_str"] == "周四001"
+        assert q1_had["recommendation_odds"] == pytest.approx(2.15)
+        assert q1_had["alternative_odds"] == [pytest.approx(3.20)]
+        # m-q1 的 TTG 未开售,推荐赔率为 None
+        q1_ttg = next(
+            r for r in rows if r["match_id"] == "m-q1" and r["play_code"] == "TTG"
+        )
+        assert q1_ttg["recommendation_odds"] is None
+        assert q1_ttg["alternative_odds"] == []
+        # m-q2 让球推荐"让球主胜"经子串回退匹配 HHAD 池的主胜赔率,
+        # 备选"让球平"同样回退匹配
+        q2_hhad = next(
+            r for r in rows if r["match_id"] == "m-q2" and r["play_code"] == "HHAD"
+        )
+        assert q2_hhad["match_num_str"] == "周四002"
+        assert q2_hhad["recommendation_odds"] == pytest.approx(1.85)
+        assert q2_hhad["alternative_odds"] == [pytest.approx(3.40)]
 
     async def test_filters_by_min_confidence(
         self, env: tuple[AsyncClient, async_sessionmaker]
@@ -351,3 +423,77 @@ class TestLlmRecommendations:
         # Assert: 等同于按查询售卖日过滤
         assert resp.status_code == 200
         assert len(resp.json()) == 4
+
+
+class TestResolveRecommendationOdds:
+    """llm_query.resolve_recommendation_odds 纯函数分支。"""
+
+    def test_exact_label_match(self) -> None:
+        # Arrange
+        pools = [
+            {
+                "poolCode": "HAD",
+                "playName": "胜平负",
+                "options": [
+                    {"code": "h", "label": "主胜", "odds": 2.15},
+                    {"code": "d", "label": "平", "odds": 3.20},
+                ],
+            }
+        ]
+
+        # Act / Assert: 精确命中选项展示名
+        assert resolve_recommendation_odds(pools, "HAD", "主胜") == pytest.approx(2.15)
+        assert resolve_recommendation_odds(pools, "HAD", "平") == pytest.approx(3.20)
+
+    def test_substring_fallback_matches_prefixed_label(self) -> None:
+        # Arrange: 让球玩法模型可能输出"让球主胜"/"让球平"这类带前缀文案
+        pools = [
+            {
+                "poolCode": "HHAD",
+                "playName": "让球胜平负",
+                "goalLine": "-1",
+                "options": [
+                    {"code": "hh", "label": "主胜", "odds": 1.85},
+                    {"code": "hd", "label": "平", "odds": 3.40},
+                ],
+            }
+        ]
+
+        # Act / Assert
+        assert resolve_recommendation_odds(pools, "HHAD", "让球主胜") == pytest.approx(1.85)
+        assert resolve_recommendation_odds(pools, "HHAD", "让球平") == pytest.approx(3.40)
+
+    def test_returns_none_when_pool_missing_or_not_on_sale(self) -> None:
+        # Arrange
+        pools = [
+            {
+                "poolCode": "HAD",
+                "playName": "胜平负",
+                "options": [{"code": "h", "label": "主胜", "odds": 2.15}],
+            }
+        ]
+
+        # Act / Assert: 未传赔率池 / 该玩法未开售 / 无匹配选项
+        assert resolve_recommendation_odds(None, "HAD", "主胜") is None
+        assert resolve_recommendation_odds([], "HAD", "主胜") is None
+        assert resolve_recommendation_odds(pools, "TTG", "3球") is None
+        assert resolve_recommendation_odds(pools, "HAD", "客胜") is None
+
+    def test_returns_none_for_invalid_odds_value(self) -> None:
+        # Arrange: 赔率缺失/非法/非正数均视为无法解析
+        pools = [
+            {
+                "poolCode": "HAD",
+                "playName": "胜平负",
+                "options": [
+                    {"code": "h", "label": "主胜", "odds": "abc"},
+                    {"code": "d", "label": "平"},
+                    {"code": "a", "label": "客胜", "odds": 0},
+                ],
+            }
+        ]
+
+        # Act / Assert
+        assert resolve_recommendation_odds(pools, "HAD", "主胜") is None
+        assert resolve_recommendation_odds(pools, "HAD", "平") is None
+        assert resolve_recommendation_odds(pools, "HAD", "客胜") is None

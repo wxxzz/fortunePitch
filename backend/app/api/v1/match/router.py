@@ -233,7 +233,7 @@ async def list_llm_recommendations(
     """按售卖日查询各场比赛最近一次 AI 分析的分玩法推荐。
 
     每场比赛仅取最近一次分析(历史多份时以最新为准),
-    输出比赛场次/主客队/玩法推荐/置信度/依据,按置信度倒序。
+    输出场次编号/主客队/玩法推荐与次选(附选项最新赔率)/置信度/依据,按置信度倒序。
     结果为数据分析参考,不构成投注建议。
 
     Raises:
@@ -248,10 +248,12 @@ async def list_llm_recommendations(
     rows: list[LlmRecommendationRowRead] = []
     for rec in recs:
         game = rec.analysis.game
+        pools = game.odds.pools if game.odds else None
         rows.append(
             LlmRecommendationRowRead(
                 analysis_id=rec.analysis.analysis_id,
                 match_id=game.match_id,
+                match_num_str=game.match_num_str,
                 league_name=game.league.league_name if game.league else None,
                 match_time=game.match_time,
                 business_date=game.business_date,
@@ -260,6 +262,13 @@ async def list_llm_recommendations(
                 play_code=rec.play_code,
                 play_name=rec.play_name,
                 recommendation=rec.recommendation,
+                recommendation_odds=llm_query.resolve_recommendation_odds(
+                    pools, rec.play_code, rec.recommendation
+                ),
+                alternative_odds=[
+                    llm_query.resolve_recommendation_odds(pools, rec.play_code, alt)
+                    for alt in rec.alternatives
+                ],
                 confidence=rec.confidence,
                 reasoning=rec.reasoning,
                 alternatives=rec.alternatives,

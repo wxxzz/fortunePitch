@@ -7,6 +7,7 @@
 """
 
 import datetime
+import typing
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,6 +18,50 @@ from app.models import MatchGame, MatchLlmAnalysis, MatchLlmPlayRec
 
 # 竞彩玩法编码(五种玩法选项卡)
 PLAY_CODES = ("HAD", "HHAD", "CRS", "TTG", "HAFU")
+
+
+def resolve_recommendation_odds(
+    pools: list[dict[str, typing.Any]] | None,
+    play_code: str,
+    recommendation: str,
+) -> float | None:
+    """从当前在售赔率池中解析推荐选项的最新赔率。
+
+    先按选项展示名精确匹配;模型对让球玩法可能输出"让球主胜"这类
+    带前缀的说法,回退为"推荐文案包含选项名"的最长子串匹配。
+    未开售或赔率未同步时返回 None。
+
+    Args:
+        pools: fp_match_odds.pools 归一化玩法列表(可为 None)。
+        play_code: 玩法编码。
+        recommendation: 推荐选项展示名。
+
+    Returns:
+        推荐选项的当前赔率;无法解析时为 None。
+    """
+    if not pools:
+        return None
+    pool = next((p for p in pools if p.get("poolCode") == play_code), None)
+    if pool is None:
+        return None
+    options = [o for o in pool.get("options") or [] if isinstance(o, dict)]
+    text = recommendation.strip()
+    matched = next(
+        (o for o in options if str(o.get("label") or "") == text), None
+    )
+    if matched is None:
+        # 子串回退取最长匹配,避免"平"抢先命中"让球平"这类文案
+        candidates = [
+            o for o in options if str(o.get("label") or "") and str(o["label"]) in text
+        ]
+        matched = max(candidates, key=lambda o: len(str(o["label"])), default=None)
+    if matched is None:
+        return None
+    try:
+        value = float(matched.get("odds"))
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
 
 
 def current_business_date() -> datetime.date:
@@ -74,6 +119,10 @@ async def query_play_recommendations(
             joinedload(MatchLlmPlayRec.analysis)
             .joinedload(MatchLlmAnalysis.game)
             .joinedload(MatchGame.league),
+            # 当前在售赔率池,用于解析推荐选项的最新赔率
+            joinedload(MatchLlmPlayRec.analysis)
+            .joinedload(MatchLlmAnalysis.game)
+            .joinedload(MatchGame.odds),
         )
         .where(MatchLlmPlayRec.confidence >= min_confidence)
         .order_by(

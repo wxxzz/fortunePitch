@@ -9,6 +9,11 @@ import { useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { useMatchStore } from '@/stores/match'
 import { useBaseStore } from '@/stores/base'
+import {
+  runLlmAnalysis,
+  runLlmFundamentalAnalysis,
+  runLlmTrendAnalysis,
+} from '@/api/match/analysis'
 import FocusRecommendCard from '@/components/match/FocusRecommendCard.vue'
 import MatchOddsCard from '@/components/match/MatchOddsCard.vue'
 import SelectionBar from '@/components/match/SelectionBar.vue'
@@ -88,6 +93,81 @@ function handleOpenDetail(matchId: string): void {
   void router.push(`/match/${matchId}`)
 }
 
+// ---------- 批量 AI 分析 ----------
+
+/** 批量分析类型,与深度分析页的三个单场分析接口一一对应 */
+type BatchKind = 'fundamental' | 'trend' | 'analysis'
+
+const BATCH_META: Record<
+  BatchKind,
+  { label: string; run: (matchId: string) => Promise<unknown> }
+> = {
+  fundamental: { label: '批量基本面分析', run: runLlmFundamentalAnalysis },
+  trend: { label: '批量赔率走势分析', run: runLlmTrendAnalysis },
+  analysis: { label: '批量AI综合分析', run: runLlmAnalysis },
+}
+
+const runningBatch = ref<BatchKind | null>(null)
+const batchDone = ref(0)
+const batchTotal = ref(0)
+const batchFailures = ref<string[]>([])
+const batchSummary = ref('')
+/** 用户请求取消:当前场次完成后停止,不再发起后续调用 */
+const batchCancelled = ref(false)
+
+const isBatchRunning = computed(() => runningBatch.value !== null)
+
+const runningBatchLabel = computed(() =>
+  runningBatch.value === null ? '' : BATCH_META[runningBatch.value].label,
+)
+
+/** 场次展示名:优先场次编号,缺失时用主客队名 */
+function gameLabel(matchId: string): string {
+  const game = filteredGames.value.find((g) => g.match_id === matchId)
+  if (!game) return matchId
+  if (game.match_num_str) return game.match_num_str
+  return `${teamName(game.home_team_id)} vs ${teamName(game.away_team_id)}`
+}
+
+/** 逐场串行调用深度分析接口:单场失败不影响后续,结果落库后可在深度分析页查看 */
+async function handleBatchAnalysis(kind: BatchKind): Promise<void> {
+  if (isBatchRunning.value) return
+  const targets = filteredGames.value.map((g) => g.match_id)
+  if (targets.length === 0) return
+  const { label, run } = BATCH_META[kind]
+  if (
+    !window.confirm(
+      `将对当前筛选出的 ${targets.length} 场比赛逐场执行「${label}」,` +
+        '单场约需 10~30 秒,期间请勿关闭页面,是否继续?',
+    )
+  ) {
+    return
+  }
+  runningBatch.value = kind
+  batchDone.value = 0
+  batchTotal.value = targets.length
+  batchFailures.value = []
+  batchSummary.value = ''
+  batchCancelled.value = false
+  for (const matchId of targets) {
+    if (batchCancelled.value) break
+    try {
+      await run(matchId)
+    } catch {
+      batchFailures.value.push(gameLabel(matchId))
+    }
+    batchDone.value += 1
+  }
+  const cancelled = batchCancelled.value && batchDone.value < batchTotal.value
+  const okCount = batchDone.value - batchFailures.value.length
+  batchSummary.value =
+    (cancelled ? `已取消,已分析 ${okCount}/${batchTotal.value} 场成功` : `「${label}」完成:${okCount}/${batchTotal.value} 场成功`) +
+    (batchFailures.value.length > 0
+      ? `,失败场次:${batchFailures.value.join('、')}`
+      : '')
+  runningBatch.value = null
+}
+
 // ---------- 选注与投注确认 ----------
 
 const isConfirmVisible = ref(false)
@@ -139,6 +219,53 @@ function handleConfirmSuccess(betCount: number): void {
           <span>仅看五大联赛</span>
         </label>
       </div>
+
+      <!-- 批量 AI 分析工具栏:逐场调用深度分析接口(串行) -->
+      <div class="match-center__batch">
+        <button
+          class="match-center__batch-btn"
+          type="button"
+          :disabled="isBatchRunning || filteredGames.length === 0"
+          @click="handleBatchAnalysis('fundamental')"
+        >
+          {{ runningBatch === 'fundamental' ? '分析中…' : '批量基本面分析' }}
+        </button>
+        <button
+          class="match-center__batch-btn"
+          type="button"
+          :disabled="isBatchRunning || filteredGames.length === 0"
+          @click="handleBatchAnalysis('trend')"
+        >
+          {{ runningBatch === 'trend' ? '分析中…' : '批量赔率走势分析' }}
+        </button>
+        <button
+          class="match-center__batch-btn"
+          type="button"
+          :disabled="isBatchRunning || filteredGames.length === 0"
+          @click="handleBatchAnalysis('analysis')"
+        >
+          {{ runningBatch === 'analysis' ? '分析中…' : '批量AI综合分析' }}
+        </button>
+        <button
+          v-if="isBatchRunning"
+          class="match-center__batch-btn match-center__batch-btn--cancel"
+          type="button"
+          @click="batchCancelled = true"
+        >
+          取消剩余
+        </button>
+        <span class="match-center__batch-hint">
+          对筛选出的 {{ filteredGames.length }} 场逐场调用大模型,结果保存后可在深度分析页查看 ·
+          仅供参考,不构成投注建议
+        </span>
+      </div>
+      <p v-if="isBatchRunning" class="match-center__batch-progress" role="status">
+        {{ runningBatchLabel }}进行中:{{ batchDone }}/{{ batchTotal }}
+        <template v-if="batchFailures.length > 0">(已失败 {{ batchFailures.length }} 场)</template>
+      </p>
+      <p v-else-if="batchSummary" class="match-center__batch-summary" role="status">
+        {{ batchSummary }}
+      </p>
 
       <p v-if="error" class="match-center__error" role="alert">{{ error }}</p>
       <p v-if="isLoading" class="match-center__hint">加载中…</p>
@@ -245,9 +372,71 @@ function handleConfirmSuccess(betCount: number): void {
     gap: vars.$spacing-xs;
   }
 
+  &__batch {
+    display: flex;
+    align-items: center;
+    gap: vars.$spacing-sm;
+    padding: vars.$spacing-sm vars.$spacing-lg;
+    margin-bottom: vars.$spacing-md;
+    background: vars.$color-surface;
+    border: 1px solid vars.$color-border;
+    border-radius: vars.$border-radius;
+    flex-wrap: wrap;
+  }
+
   &__date-sep {
     font-size: vars.$font-size-sm;
     color: vars.$color-text-secondary;
+  }
+
+  &__batch-btn {
+    padding: vars.$spacing-xs vars.$spacing-md;
+    border: 1px solid vars.$color-primary;
+    border-radius: vars.$border-radius;
+    background: vars.$color-surface;
+    color: vars.$color-primary;
+    font-size: vars.$font-size-sm;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.2s;
+
+    &:hover:not(:disabled) {
+      background: vars.$color-primary-light;
+    }
+
+    &:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    &--cancel {
+      border-color: vars.$color-danger;
+      color: vars.$color-danger;
+
+      &:hover:not(:disabled) {
+        background: rgba(214, 69, 65, 0.1);
+      }
+    }
+  }
+
+  &__batch-hint {
+    font-size: vars.$font-size-sm;
+    color: vars.$color-text-secondary;
+  }
+
+  &__batch-progress {
+    margin: 0 0 vars.$spacing-md;
+    font-size: vars.$font-size-sm;
+    color: vars.$color-primary;
+  }
+
+  &__batch-summary {
+    margin: 0 0 vars.$spacing-md;
+    padding: vars.$spacing-sm vars.$spacing-md;
+    border-radius: vars.$border-radius;
+    background: vars.$color-primary-light;
+    color: vars.$color-primary;
+    font-size: vars.$font-size-sm;
   }
 
   &__error {
