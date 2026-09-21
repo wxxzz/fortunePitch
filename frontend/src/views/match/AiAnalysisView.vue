@@ -5,7 +5,8 @@
  * 数据来源为赛事中心深度分析页"AI 分析"落库的结果
  * (每场比赛仅取最近一次分析,历史多份时以最新为准);
  * 五种玩法选项卡(胜平负/让球胜平负/比分/总进球/半全场)展示
- * 比赛场次编号、主客队、玩法推荐与备选(附最新赔率,如 主胜@1.63)、置信度与依据。
+ * 比赛场次编号、主客队、玩法推荐与备选(附最新赔率,如 主胜@1.63)、
+ * 赛果开奖与命中比对、置信度与依据。
  * 结果为数据分析参考,不构成投注建议。
  */
 import { computed, onMounted, ref } from 'vue'
@@ -54,6 +55,19 @@ const activeRows = computed<LlmRecommendationRow[]>(() =>
 )
 
 const totalCount = computed(() => rows.value.length)
+
+/** 当前选项卡已开奖推荐的命中统计(未开奖条目不计入) */
+const hitStats = computed<{ hit: number; settled: number }>(() => {
+  let hit = 0
+  let settled = 0
+  for (const row of activeRows.value) {
+    if (row.is_hit !== null) {
+      settled += 1
+      if (row.is_hit) hit += 1
+    }
+  }
+  return { hit, settled }
+})
 
 /** 置信度展示档位:高(>=0.70)/ 中(>=0.50)/ 低 */
 function confidenceTone(confidence: number): 'high' | 'mid' | 'low' {
@@ -122,7 +136,8 @@ onMounted(() => {
       <h2 class="ai-analysis__title">AI 分析结果</h2>
       <p class="ai-analysis__subtitle">
         查询已保存的大模型分析推荐:按售卖日过滤,每场比赛取最近一次分析,
-        输出五种玩法的推荐与备选选项(附最新赔率)、置信度与依据。结果为数据分析参考,不构成投注建议。
+        输出五种玩法的推荐与备选选项(附最新赔率)、开奖对比、置信度与依据。
+        结果为数据分析参考,不构成投注建议。
       </p>
     </header>
 
@@ -158,7 +173,9 @@ onMounted(() => {
         查询
       </button>
       <span v-if="totalCount > 0" class="ai-analysis__meta">
-        共 {{ totalCount }} 条推荐
+        共 {{ totalCount }} 条推荐<template v-if="hitStats.settled > 0">
+          · 当前玩法已开奖命中 {{ hitStats.hit }}/{{ hitStats.settled }}</template
+        >
       </span>
     </div>
 
@@ -191,6 +208,8 @@ onMounted(() => {
           <th>推荐</th>
           <th>置信度</th>
           <th>备选</th>
+          <th>开奖结果</th>
+          <th>对比</th>
           <th>依据</th>
         </tr>
       </thead>
@@ -229,6 +248,19 @@ onMounted(() => {
               }}
             </template>
             <template v-else>—</template>
+          </td>
+          <td class="ai-analysis__result">{{ row.result ?? '—' }}</td>
+          <td>
+            <span
+              v-if="row.is_hit !== null"
+              class="ai-analysis__hit"
+              :class="
+                row.is_hit ? 'ai-analysis__hit--hit' : 'ai-analysis__hit--miss'
+              "
+            >
+              {{ row.is_hit ? '命中' : '未中' }}
+            </span>
+            <span v-else class="ai-analysis__hit ai-analysis__hit--pending">未开奖</span>
           </td>
           <td class="ai-analysis__reasoning">{{ row.reasoning }}</td>
         </tr>
@@ -483,6 +515,35 @@ onMounted(() => {
     font-size: vars.$font-size-sm;
     color: vars.$color-text-secondary;
     white-space: nowrap;
+  }
+
+  &__result {
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+
+  &__hit {
+    display: inline-block;
+    min-width: 44px;
+    padding: 2px vars.$spacing-sm;
+    border-radius: 10px;
+    font-size: vars.$font-size-sm;
+    font-weight: 600;
+
+    &--hit {
+      background: rgba(15, 81, 50, 0.1);
+      color: vars.$color-primary;
+    }
+
+    &--miss {
+      background: rgba(192, 57, 43, 0.08);
+      color: vars.$color-danger;
+    }
+
+    &--pending {
+      background: vars.$color-surface-hover;
+      color: vars.$color-text-secondary;
+    }
   }
 
   &__reasoning {

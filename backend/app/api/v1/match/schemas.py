@@ -211,6 +211,14 @@ class LlmRecommendationRowRead(BaseModel):
         default_factory=list,
         description="次选选项的当前在售赔率,与 alternatives 按位对齐(无法解析时为 None)",
     )
+    result: str | None = Field(
+        default=None,
+        description="该玩法的赛果开奖结果(如 客胜/让球主胜/1:2/3/负负,未同步赛果时为 None)",
+    )
+    is_hit: bool | None = Field(
+        default=None,
+        description="推荐与开奖的比对结论(命中 True/未中 False,未开奖为 None)",
+    )
     confidence: float = Field(description="置信度,0~1")
     reasoning: str = Field(description="推荐依据")
     alternatives: list[str] = Field(default_factory=list, description="次选选项")
@@ -218,6 +226,47 @@ class LlmRecommendationRowRead(BaseModel):
 
 
 # ---------- 赛果开奖 ----------
+
+class ResultStatItemRead(BaseModel):
+    """单个统计条目(标签 / 次数 / 占比)。"""
+
+    label: str = Field(description="统计标签,如 主胜 / 3 / 2:1 / 胜胜")
+    count: int = Field(description="出现次数")
+    pct: float = Field(ge=0.0, le=1.0, description="该维度有效场次中的占比,0~1")
+
+
+class ResultLeagueStatRead(BaseModel):
+    """按联赛的赛果统计行。"""
+
+    league_name: str = Field(description="联赛名称")
+    total: int = Field(description="该联赛已开赛场次")
+    home_win: int = Field(description="主胜场次")
+    draw: int = Field(description="平局场次")
+    away_win: int = Field(description="客胜场次")
+    avg_total_goals: float | None = Field(
+        default=None, description="场均总进球(无已开赛场次时为 None)"
+    )
+
+
+class MatchResultStatsRead(BaseModel):
+    """赛果开奖多维度统计响应模型。"""
+
+    start_date: datetime.date = Field(description="售卖日起(含)")
+    end_date: datetime.date = Field(description="售卖日止(含)")
+    total: int = Field(description="范围内总场次(含取消/无效)")
+    settled: int = Field(description="已开赛场次(有有效比分)")
+    cancelled: int = Field(description="取消/无效场次")
+    had: list[ResultStatItemRead] = Field(description="胜平负开奖分布(主胜/平/客胜)")
+    hhad: list[ResultStatItemRead] = Field(
+        description="让球胜平负开奖分布(让球主胜/让球平/让球客胜)"
+    )
+    ttg: list[ResultStatItemRead] = Field(description="总进球分布(按进球数升序,7+ 合并)")
+    crs: list[ResultStatItemRead] = Field(description="比分分布(按次数倒序)")
+    hafu: list[ResultStatItemRead] = Field(description="半全场分布(按次数倒序)")
+    leagues: list[ResultLeagueStatRead] = Field(
+        description="按联赛统计(按已开赛场次倒序)"
+    )
+
 
 class MatchResultRead(BaseModel):
     """赛果开奖响应模型(开奖页展示口径)。"""
@@ -228,6 +277,9 @@ class MatchResultRead(BaseModel):
     home_team_name: str = Field(description="主队名称")
     away_team_name: str = Field(description="客队名称")
     match_time: datetime.datetime = Field(description="开赛时间")
+    business_date: datetime.date | None = Field(
+        default=None, description="竞彩售卖日(次日凌晨开赛归属前一售卖日)"
+    )
     goal_line: str | None = Field(default=None, description="让球盘口,如 -1")
     half_score: str | None = Field(default=None, description="半场比分,如 0:1")
     full_score: str | None = Field(default=None, description="全场比分,如 1:2")

@@ -19,6 +19,15 @@ from app.models import MatchGame, MatchLlmAnalysis, MatchLlmPlayRec
 # 竞彩玩法编码(五种玩法选项卡)
 PLAY_CODES = ("HAD", "HHAD", "CRS", "TTG", "HAFU")
 
+# 玩法编码 -> fp_match_results 中的开奖结果字段
+RESULT_FIELD_BY_PLAY = {
+    "HAD": "had",
+    "HHAD": "hhad",
+    "CRS": "crs",
+    "TTG": "ttg",
+    "HAFU": "hafu",
+}
+
 
 def resolve_recommendation_odds(
     pools: list[dict[str, typing.Any]] | None,
@@ -62,6 +71,46 @@ def resolve_recommendation_odds(
     except (TypeError, ValueError):
         return None
     return value if value > 0 else None
+
+
+def _normalize_play_label(play_code: str, text: str) -> str:
+    """归一化玩法选项文案,便于推荐与开奖结果比对。
+
+    去掉两端空白;让球玩法模型可能带/不带"让球"前缀(如"让球主胜" vs
+    开奖"让球主胜"或推荐"主胜"),统一剥掉;总进球推荐常带"球"后缀
+    (如"3球" vs 开奖"3"),统一剥掉。
+    """
+    normalized = str(text or "").strip()
+    if normalized.startswith("让球"):
+        normalized = normalized[2:]
+    if play_code == "TTG" and normalized.endswith("球"):
+        normalized = normalized[:-1]
+    return normalized
+
+
+def resolve_recommendation_hit(
+    play_code: str,
+    recommendation: str,
+    result: str | None,
+) -> bool | None:
+    """比对推荐选项与该玩法的赛果开奖结果。
+
+    推荐与开奖文案均归一化后精确比对(模型输出与开奖页口径可能存在
+    "让球"前缀/"球"后缀差异)。未同步赛果(未开奖)时返回 None。
+
+    Args:
+        play_code: 玩法编码。
+        recommendation: 推荐选项展示名。
+        result: 该玩法的开奖结果标签(如"客胜"/"让球主胜"/"1:2"/"3"/"负负")。
+
+    Returns:
+        命中为 True,未中为 False,未开奖为 None。
+    """
+    if not result:
+        return None
+    return _normalize_play_label(play_code, recommendation) == _normalize_play_label(
+        play_code, result
+    )
 
 
 def current_business_date() -> datetime.date:
@@ -123,6 +172,10 @@ async def query_play_recommendations(
             joinedload(MatchLlmPlayRec.analysis)
             .joinedload(MatchLlmAnalysis.game)
             .joinedload(MatchGame.odds),
+            # 赛果开奖数据,用于推荐与赛果的命中比对
+            joinedload(MatchLlmPlayRec.analysis)
+            .joinedload(MatchLlmAnalysis.game)
+            .joinedload(MatchGame.result),
         )
         .where(MatchLlmPlayRec.confidence >= min_confidence)
         .order_by(

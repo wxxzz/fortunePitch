@@ -13,6 +13,7 @@ from app.api.v1.match.schemas import (
     LlmRecommendationRowRead,
     LlmTrendAnalysisRead,
     MatchEventCreate,
+    MatchResultStatsRead,
     MatchEventRead,
     MatchGameCreate,
     MatchGameRead,
@@ -233,7 +234,8 @@ async def list_llm_recommendations(
     """按售卖日查询各场比赛最近一次 AI 分析的分玩法推荐。
 
     每场比赛仅取最近一次分析(历史多份时以最新为准),
-    输出场次编号/主客队/玩法推荐与次选(附选项最新赔率)/置信度/依据,按置信度倒序。
+    输出场次编号/主客队/玩法推荐与次选(附选项最新赔率)/赛果开奖
+    与命中比对/置信度/依据,按置信度倒序。
     结果为数据分析参考,不构成投注建议。
 
     Raises:
@@ -249,6 +251,14 @@ async def list_llm_recommendations(
     for rec in recs:
         game = rec.analysis.game
         pools = game.odds.pools if game.odds else None
+        # 该玩法的赛果开奖结果(未同步赛果时为 None)
+        play_result = (
+            getattr(
+                game.result, llm_query.RESULT_FIELD_BY_PLAY[rec.play_code], None
+            )
+            if game.result is not None
+            else None
+        )
         rows.append(
             LlmRecommendationRowRead(
                 analysis_id=rec.analysis.analysis_id,
@@ -269,6 +279,10 @@ async def list_llm_recommendations(
                     llm_query.resolve_recommendation_odds(pools, rec.play_code, alt)
                     for alt in rec.alternatives
                 ],
+                result=play_result,
+                is_hit=llm_query.resolve_recommendation_hit(
+                    rec.play_code, rec.recommendation, play_result
+                ),
                 confidence=rec.confidence,
                 reasoning=rec.reasoning,
                 alternatives=rec.alternatives,
@@ -403,18 +417,22 @@ async def list_llm_odds_trends(
 # ---------- 赛果开奖 /results ----------
 
 @router.get(
-    "/results", response_model=list[MatchResultRead], summary="按售卖日查询赛果开奖"
+    "/results",
+    response_model=list[MatchResultRead],
+    summary="按售卖日范围查询赛果开奖",
 )
 async def list_results(
-    date: datetime.date = Query(description="售卖日(YYYY-MM-DD),与赛事中心口径一致"),
+    start_date: datetime.date = Query(description="售卖日起(含,YYYY-MM-DD)"),
+    end_date: datetime.date = Query(description="售卖日止(含,YYYY-MM-DD)"),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[MatchResultRead]:
-    """查询指定售卖日的赛果开奖列表(含各玩法开奖结果与 SP)。
+    """查询指定售卖日范围的赛果开奖列表(含各玩法开奖结果与 SP)。
 
     按比赛的竞彩售卖日(fp_match_games.business_date)过滤,次日凌晨开赛的
-    比赛归属前一售卖日。数据由采集模块的赛果同步写入,未同步的日期返回空列表。
+    比赛归属前一售卖日;跨多日时按售卖日 + 场次编号排序。数据由采集模块的
+    赛果同步写入,未同步的日期返回空列表。
     """
-    pairs = await result_sync.list_results_by_business_date(session, date)
+    pairs = await result_sync.list_results_by_business_date(session, start_date, end_date)
     return [
         MatchResultRead(
             match_id=result.match_id,
@@ -423,6 +441,7 @@ async def list_results(
             home_team_name=game.home_team.team_name,
             away_team_name=game.away_team.team_name,
             match_time=game.match_time,
+            business_date=game.business_date,
             goal_line=result.goal_line,
             half_score=(
                 f"{result.half_home_score}:{result.half_away_score}"
@@ -446,6 +465,26 @@ async def list_results(
         )
         for result, game in pairs
     ]
+
+
+@router.get(
+    "/results/stats",
+    response_model=MatchResultStatsRead,
+    summary="按售卖日范围统计赛果开奖的多维度分布",
+)
+async def get_result_stats(
+    start_date: datetime.date = Query(description="售卖日起(含,YYYY-MM-DD)"),
+    end_date: datetime.date = Query(description="售卖日止(含,YYYY-MM-DD)"),
+    session: AsyncSession = Depends(get_db_session),
+) -> MatchResultStatsRead:
+    """统计指定售卖日范围内赛果的多维度分布,供开奖页分析区展示。
+
+    维度:胜平负/让球胜平负/总进球(7+ 合并)/比分/半全场的开奖分布,
+    以及按联赛的胜负分布与场均进球。取消/无效场次不参与统计;
+    数据由采集模块的赛果同步写入,未同步的日期各维度为空。
+    """
+    stats = await result_sync.build_result_stats(session, start_date, end_date)
+    return MatchResultStatsRead(start_date=start_date, end_date=end_date, **stats)
 
 
 # ---------- 比赛事件 /events ----------

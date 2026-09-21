@@ -315,7 +315,7 @@ class TestResultSync:
             await session.commit()
         async with session_factory() as session:
             pairs = await result_sync.list_results_by_business_date(
-                session, datetime.date(2026, 8, 24)
+                session, datetime.date(2026, 8, 24), datetime.date(2026, 8, 24)
             )
 
         # 2041030 开赛时间为次日 01:30,售卖日仍为 08-24,计入
@@ -328,6 +328,71 @@ class TestResultSync:
         assert game.league.league_name == "西班牙甲级联赛"
         assert game.home_team.team_name == "巴塞罗那"
 
+    async def test_list_results_by_date_range_orders_by_sale_date(
+        self, session_factory: async_sessionmaker
+    ) -> None:
+        """范围查询:跨售卖日按 售卖日 + 场次编号 排序。"""
+        # Arrange: 同步 08-24 后,补一场 08-25 售卖日的赛果
+        async with session_factory() as session:
+            await result_sync.sync_results_by_date(
+                session, "2026-08-24", date_type="sale"
+            )
+            league = (await session.scalars(select(League))).one()
+            home = (
+                await session.scalars(
+                    select(Team).where(Team.team_name == "皇家马德里")
+                )
+            ).one()
+            away = (
+                await session.scalars(
+                    select(Team).where(Team.team_name == "桑坦德竞技")
+                )
+            ).one()
+            session.add(
+                MatchGame(
+                    match_id="2041201",
+                    league_id=league.league_id,
+                    home_team_id=home.team_id,
+                    away_team_id=away.team_id,
+                    match_time=datetime.datetime(2026, 8, 25, 20, 0),
+                    business_date=datetime.date(2026, 8, 25),
+                    match_status=MatchStatus.PENDING,
+                )
+            )
+            await session.flush()
+            session.add(
+                MatchResult(
+                    match_id="2041201",
+                    match_num_str="周二001",
+                    goal_line=None,
+                    half_home_score=1,
+                    half_away_score=1,
+                    full_home_score=2,
+                    full_away_score=2,
+                    had="平",
+                    hhad="让球平",
+                    crs="2:2",
+                    ttg="4",
+                    hafu="平平",
+                    pool_status="Payout",
+                )
+            )
+            await session.commit()
+
+        # Act
+        async with session_factory() as session:
+            pairs = await result_sync.list_results_by_business_date(
+                session, datetime.date(2026, 8, 24), datetime.date(2026, 8, 26)
+            )
+
+        # Assert: 08-24 三场(按场次编号)在前,08-25 一场在后
+        assert [result.match_id for result, _ in pairs] == [
+            "2041028",
+            "2041030",
+            "2041031",
+            "2041201",
+        ]
+
     async def test_sync_empty_day_reports_zero(
         self, session_factory: async_sessionmaker
     ) -> None:
@@ -338,6 +403,91 @@ class TestResultSync:
         assert result.day_result_count == 0
         assert result.created_count == 0
         assert result.skipped_matches == []
+
+
+class TestResultStats:
+    """赛果多维度统计测试。"""
+
+    async def test_build_result_stats_dimensions(
+        self, session_factory: async_sessionmaker
+    ) -> None:
+        # Arrange: 售卖日口径同步(客胜 1:2 / 主胜让球 3:1 / 取消 1 场)
+        async with session_factory() as session:
+            await result_sync.sync_results_by_date(
+                session, "2026-08-24", date_type="sale"
+            )
+            await session.commit()
+
+        # Act
+        async with session_factory() as session:
+            stats = await result_sync.build_result_stats(
+                session, datetime.date(2026, 8, 24), datetime.date(2026, 8, 24)
+            )
+
+        # Assert
+        assert stats["total"] == 3
+        assert stats["settled"] == 2
+        assert stats["cancelled"] == 1
+        # 胜平负按固定顺序输出,平局无场次不出现
+        assert stats["had"] == [
+            {"label": "主胜", "count": 1, "pct": pytest.approx(0.5)},
+            {"label": "客胜", "count": 1, "pct": pytest.approx(0.5)},
+        ]
+        assert [item["label"] for item in stats["hhad"]] == ["让球主胜", "让球客胜"]
+        # 总进球按数值升序
+        assert [item["label"] for item in stats["ttg"]] == ["3", "4"]
+        # 比分/半全场同次数按标签升序
+        assert [item["label"] for item in stats["crs"]] == ["1:2", "3:1"]
+        assert [item["label"] for item in stats["hafu"]] == ["胜胜", "负负"]
+        # 按联赛统计:取消场次不参与
+        assert stats["leagues"] == [
+            {
+                "league_name": "西班牙甲级联赛",
+                "total": 2,
+                "home_win": 1,
+                "draw": 0,
+                "away_win": 1,
+                "avg_total_goals": 3.5,
+            }
+        ]
+
+    async def test_build_result_stats_empty_date(
+        self, session_factory: async_sessionmaker
+    ) -> None:
+        # Act
+        async with session_factory() as session:
+            stats = await result_sync.build_result_stats(
+                session, datetime.date(2026, 9, 1), datetime.date(2026, 9, 1)
+            )
+
+        # Assert: 未同步的日期各维度为空
+        assert stats["total"] == 0
+        assert stats["settled"] == 0
+        assert stats["had"] == []
+        assert stats["leagues"] == []
+
+    def test_ttg_distribution_merges_seven_plus(self) -> None:
+        # Act
+        items = result_sync._ttg_distribution(["2", "3", "8", "9", "0", None, ""])
+
+        # Assert: 7 球及以上合并为"7+",按数值升序
+        assert [item["label"] for item in items] == ["0", "2", "3", "7+"]
+        seven_plus = items[-1]
+        assert seven_plus["count"] == 2
+        assert seven_plus["pct"] == pytest.approx(2 / 5)
+
+    def test_ranked_distribution_orders_by_count_desc(self) -> None:
+        # Act
+        items = result_sync._ranked_distribution(
+            ["1:1", "2:0", "1:1", "0:0", None, "2:0"]
+        )
+
+        # Assert: 次数倒序,同次数按标签升序
+        assert [(item["label"], item["count"]) for item in items] == [
+            ("1:1", 2),
+            ("2:0", 2),
+            ("0:0", 1),
+        ]
 
 
 # ---------- 接口层 ----------
@@ -389,7 +539,7 @@ class TestResultAPI:
         )
         response = await client.get(
             "/api/v1/match/results",
-            params={"date": "2026-08-24"},
+            params={"start_date": "2026-08-24", "end_date": "2026-08-24"},
             headers=HEADERS,
         )
         assert response.status_code == 200
@@ -404,6 +554,7 @@ class TestResultAPI:
         assert first["match_num_str"] == "周一001"
         assert first["league_name"] == "西班牙甲级联赛"
         assert first["home_team_name"] == "巴塞罗那"
+        assert first["business_date"] == "2026-08-24"
         assert first["half_score"] == "0:1"
         assert first["full_score"] == "1:2"
         assert first["had"] == "客胜"
@@ -421,11 +572,41 @@ class TestResultAPI:
     async def test_list_results_empty_before_sync(self, client: AsyncClient) -> None:
         response = await client.get(
             "/api/v1/match/results",
-            params={"date": "2026-08-24"},
+            params={"start_date": "2026-08-24", "end_date": "2026-08-24"},
             headers=HEADERS,
         )
         assert response.status_code == 200
         assert response.json() == []
+
+    async def test_result_stats_endpoint(self, client: AsyncClient) -> None:
+        # Arrange: 售卖日口径同步赛果
+        await client.post(
+            "/api/v1/collector/results/sync",
+            json={"date": "2026-08-24", "date_type": "sale"},
+            headers=HEADERS,
+        )
+
+        # Act
+        response = await client.get(
+            "/api/v1/match/results/stats",
+            params={"start_date": "2026-08-24", "end_date": "2026-08-24"},
+            headers=HEADERS,
+        )
+
+        # Assert
+        assert response.status_code == 200
+        body = response.json()
+        assert body["start_date"] == "2026-08-24"
+        assert body["end_date"] == "2026-08-24"
+        assert body["total"] == 3
+        assert body["settled"] == 2
+        assert body["cancelled"] == 1
+        assert {item["label"] for item in body["had"]} == {"主胜", "客胜"}
+        assert [item["label"] for item in body["ttg"]] == ["3", "4"]
+        league = body["leagues"][0]
+        assert league["league_name"] == "西班牙甲级联赛"
+        assert league["home_win"] == 1
+        assert league["avg_total_goals"] == pytest.approx(3.5)
 
     async def test_endpoints_reject_bad_date(self, client: AsyncClient) -> None:
         response = await client.post(
@@ -436,7 +617,7 @@ class TestResultAPI:
         assert response.status_code == 422
         response = await client.get(
             "/api/v1/match/results",
-            params={"date": "not-a-date"},
+            params={"start_date": "not-a-date", "end_date": "2026-08-24"},
             headers=HEADERS,
         )
         assert response.status_code == 422

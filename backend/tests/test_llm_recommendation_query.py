@@ -6,8 +6,10 @@
 - 置信度下限过滤(含边界);
 - 玩法编码过滤与非法编码(422);
 - 排序(置信度倒序)与比赛上下文(联赛/主客队)输出;
-- 场次编号与推荐/备选选项最新赔率(含"让球主胜"子串回退匹配)。
-另覆盖 llm_query.resolve_recommendation_odds 的纯函数分支。
+- 场次编号与推荐/备选选项最新赔率(含"让球主胜"子串回退匹配);
+- 赛果开奖结果与推荐命中比对(未同步赛果时为 None)。
+另覆盖 llm_query.resolve_recommendation_odds / resolve_recommendation_hit
+的纯函数分支。
 """
 
 import datetime
@@ -21,13 +23,17 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.core.config import get_settings
 from app.core.database import Base, get_db_session
 from app.main import app
-from app.services.llm_query import resolve_recommendation_odds
+from app.services.llm_query import (
+    resolve_recommendation_hit,
+    resolve_recommendation_odds,
+)
 from app.models import (
     League,
     MatchGame,
     MatchLlmAnalysis,
     MatchLlmPlayRec,
     MatchOdds,
+    MatchResult,
     Team,
 )
 
@@ -112,8 +118,9 @@ async def _seed(session_factory: async_sessionmaker) -> None:
     """预置三场比赛(两场在查询售卖日,一场在其他日期)、在售赔率与分析历史。
 
     - m-q1:两次分析(旧分析的推荐不应出现在查询结果中),
-      在售赔率仅 HAD(TTG 推荐赔率应为 None);
-    - m-q2:一次分析,胜平负置信度 0.5、让球 0.8,在售 HAD+HHAD;
+      在售赔率仅 HAD(TTG 推荐赔率应为 None),赛果 2:1(主胜/3球命中);
+    - m-q2:一次分析,胜平负置信度 0.5、让球 0.8,在售 HAD+HHAD,
+      赛果 2:2 让球盘口 -1(胜平负/让球均未中);
     - m-q3:其他售卖日,不应出现。
     """
     async with session_factory() as session:
@@ -186,6 +193,44 @@ async def _seed(session_factory: async_sessionmaker) -> None:
                     },
                 ],
                 update_time=datetime.datetime(2026, 9, 16, 10, 0),
+            )
+        )
+        await session.flush()
+
+        # 赛果开奖数据:m-q1 全场 2:1/半场 1:0(主胜、总进球 3 均命中推荐),
+        # m-q2 全场 2:2/半场 0:0、让球盘口 -1(平局,推荐客胜/让球主胜均未中)
+        session.add(
+            MatchResult(
+                match_id="m-q1",
+                match_num_str="周四001",
+                goal_line=None,
+                half_home_score=1,
+                half_away_score=0,
+                full_home_score=2,
+                full_away_score=1,
+                had="主胜",
+                hhad=None,
+                crs="2:1",
+                ttg="3",
+                hafu="胜胜",
+                pool_status="Payout",
+            )
+        )
+        session.add(
+            MatchResult(
+                match_id="m-q2",
+                match_num_str="周四002",
+                goal_line="-1",
+                half_home_score=0,
+                half_away_score=0,
+                full_home_score=2,
+                full_away_score=2,
+                had="平",
+                hhad="让球客胜",
+                crs="2:2",
+                ttg="4",
+                hafu="平平",
+                pool_status="Payout",
             )
         )
         await session.flush()
@@ -318,6 +363,18 @@ class TestLlmRecommendations:
         assert q2_hhad["match_num_str"] == "周四002"
         assert q2_hhad["recommendation_odds"] == pytest.approx(1.85)
         assert q2_hhad["alternative_odds"] == [pytest.approx(3.40)]
+        # 赛果开奖与命中比对:m-q1 主胜/3球命中,m-q2 平局/让球客胜未中
+        assert q1_had["result"] == "主胜"
+        assert q1_had["is_hit"] is True
+        assert q1_ttg["result"] == "3"
+        assert q1_ttg["is_hit"] is True
+        q2_had = next(
+            r for r in rows if r["match_id"] == "m-q2" and r["play_code"] == "HAD"
+        )
+        assert q2_had["result"] == "平"
+        assert q2_had["is_hit"] is False
+        assert q2_hhad["result"] == "让球客胜"
+        assert q2_hhad["is_hit"] is False
 
     async def test_filters_by_min_confidence(
         self, env: tuple[AsyncClient, async_sessionmaker]
@@ -497,3 +554,30 @@ class TestResolveRecommendationOdds:
         assert resolve_recommendation_odds(pools, "HAD", "主胜") is None
         assert resolve_recommendation_odds(pools, "HAD", "平") is None
         assert resolve_recommendation_odds(pools, "HAD", "客胜") is None
+
+
+class TestResolveRecommendationHit:
+    """llm_query.resolve_recommendation_hit 纯函数分支。"""
+
+    def test_exact_label_match(self) -> None:
+        # Act / Assert: 五种玩法的推荐与开奖文案一致时命中
+        assert resolve_recommendation_hit("HAD", "主胜", "主胜") is True
+        assert resolve_recommendation_hit("CRS", "1:2", "1:2") is True
+        assert resolve_recommendation_hit("HAFU", "胜胜", "胜胜") is True
+
+    def test_prefix_and_suffix_normalization(self) -> None:
+        # Act / Assert: 让球前缀/总进球"球"后缀差异归一化后仍命中
+        assert resolve_recommendation_hit("HHAD", "主胜", "让球主胜") is True
+        assert resolve_recommendation_hit("HHAD", "让球主胜", "让球主胜") is True
+        assert resolve_recommendation_hit("TTG", "3球", "3") is True
+
+    def test_miss_when_labels_differ(self) -> None:
+        # Act / Assert
+        assert resolve_recommendation_hit("HAD", "主胜", "客胜") is False
+        assert resolve_recommendation_hit("HHAD", "让球主胜", "让球客胜") is False
+        assert resolve_recommendation_hit("TTG", "3球", "4") is False
+
+    def test_returns_none_without_result(self) -> None:
+        # Act / Assert: 未同步赛果/未开奖时为 None
+        assert resolve_recommendation_hit("HAD", "主胜", None) is None
+        assert resolve_recommendation_hit("HAD", "主胜", "") is None

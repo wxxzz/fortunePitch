@@ -147,6 +147,10 @@ export interface LlmRecommendationRow {
   recommendation_odds: number | null
   /** 与 alternatives 按位对齐的最新赔率(未开售或无法解析时为 null) */
   alternative_odds: (number | null)[]
+  /** 该玩法的赛果开奖结果(未同步赛果时为 null) */
+  result: string | null
+  /** 推荐与开奖的比对结论(未开奖时为 null) */
+  is_hit: boolean | null
   confidence: number
   reasoning: string
   alternatives: string[]
