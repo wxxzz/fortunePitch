@@ -9,6 +9,9 @@ from app.api.v1.strategy.schemas import (
     BetSchemeRead,
     OddsHistoryCreate,
     OddsHistoryRead,
+    PlanAnalysisRead,
+    PlanAnalysisRequest,
+    SelectionAnalysisRead,
     RecommendationCreate,
     RecommendationRead,
     UserDecisionCreate,
@@ -23,7 +26,7 @@ from app.core.database import get_db_session
 from app.core.exceptions import DataValidationError
 from app.core.security import verify_api_key
 from app.models import BetScheme, MatchGame, OddsHistory, Recommendation, UserDecision
-from app.services import crud
+from app.services import crud, plan_analysis
 from app.services.parlay import ParlayPick, list_bet_schemes, save_bet_scheme
 from app.services.poisson import kelly_fraction
 from app.services.user_picks import UserPick, create_user_picks
@@ -238,6 +241,62 @@ async def list_schemes(
 ) -> list[BetScheme]:
     """分页查询串关虚拟投注方案,可按用户过滤,按创建时间倒序。"""
     return await list_bet_schemes(session, user_id=user_id, offset=offset, limit=limit)
+
+
+# ---------- 投注方案分析 /plan-analysis ----------
+
+@router.post(
+    "/plan-analysis",
+    response_model=PlanAnalysisRead,
+    status_code=status.HTTP_200_OK,
+    summary="投注方案分析(中奖概率与期望值)",
+)
+async def analyze_bet_plan(
+    payload: PlanAnalysisRequest, session: AsyncSession = Depends(get_db_session)
+) -> PlanAnalysisRead:
+    """基于赔率隐含概率(去水归一)分析投注方案,不落库。
+
+    逐条选注输出隐含概率/公平赔率/单位期望/凯利比例;整体输出方案
+    中奖概率与期望值:单关按各注独立结算,串关/混合按 N串1 组合口径
+    (复式多选项)。赔率优先取库中当前在售值,勾选时点赔率兜底。
+    注额为模拟数据,结果不构成投注建议。
+
+    Raises:
+        DataValidationError: 参数非法或选注不满足串关规则(422)。
+    """
+    picks = [
+        ParlayPick(
+            match_id=item.match_id,
+            match_name=item.match_name,
+            pool_code=item.pool_code,
+            play_name=item.play_name,
+            option_code=item.option_code,
+            option_label=item.option_label,
+            odds=item.odds,
+        )
+        for item in payload.selections
+    ]
+    result = await plan_analysis.analyze_plan(
+        session,
+        picks,
+        payload.mode,
+        payload.parlay_size,
+        payload.stake_per_bet,
+    )
+    return PlanAnalysisRead(
+        probability_source="implied",
+        mode=result.mode,
+        selections=[
+            SelectionAnalysisRead.model_validate(a) for a in result.selections
+        ],
+        bet_count=result.bet_count,
+        total_stake=result.total_stake,
+        max_odds=result.max_odds,
+        win_prob=result.win_prob,
+        expected_return=result.expected_return,
+        expected_value=result.expected_value,
+        ev_pct=result.ev_pct,
+    )
 
 
 # ---------- 凯利指数 /kelly ----------
