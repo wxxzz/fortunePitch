@@ -168,7 +168,7 @@ class BetSchemeCreate(BaseModel):
 
 
 class BetSchemeItemRead(BaseModel):
-    """串关方案选注明细响应模型。"""
+    """串关方案选注明细响应模型(含读时判定的赛果与命中)。"""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -180,10 +180,12 @@ class BetSchemeItemRead(BaseModel):
     option_code: str
     option_label: str
     odds: float
+    result_label: str | None = Field(default=None, description="该腿赛果标签,未开奖为 None")
+    is_hit: bool | None = Field(default=None, description="该腿是否命中,未开奖为 None")
 
 
 class BetSchemeRead(BaseModel):
-    """串关虚拟投注方案响应模型。"""
+    """串关虚拟投注方案响应模型(盈亏为读时实时计算,不落库)。"""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -196,6 +198,9 @@ class BetSchemeRead(BaseModel):
     max_odds: float | None
     status: str
     created_at: datetime.datetime
+    profit_loss: float | None = Field(
+        default=None, description="盈亏 = 总回报 - 总投入,任一腿未开奖为 None"
+    )
     items: list[BetSchemeItemRead]
 
 
@@ -266,3 +271,82 @@ class PlanAnalysisRead(BaseModel):
     expected_return: float = Field(description="期望回报金额(模拟)")
     expected_value: float = Field(description="期望值 = 期望回报 - 总投入")
     ev_pct: float = Field(description="期望回报率 = 期望值 / 总投入")
+
+
+# ---------- 复盘结算与统计 /settlement /review ----------
+
+class SettlementRequest(BaseModel):
+    """复盘结算请求体。"""
+
+    user_id: int | None = Field(
+        default=None, description="按用户结算,None 为全部用户"
+    )
+
+
+class SettlementResultRead(BaseModel):
+    """复盘结算结果(本次触发实际结算的计数,幂等)。"""
+
+    decision_wins: int = Field(description="本次结算为 WIN 的单关决策数")
+    decision_losses: int = Field(description="本次结算为 LOSS 的单关决策数")
+    scheme_wins: int = Field(description="本次结算为 WIN 的串关方案数")
+    scheme_losses: int = Field(description="本次结算为 LOSS 的串关方案数")
+
+
+class ReviewKpiRead(BaseModel):
+    """复盘核心指标。"""
+
+    total_bets: int = Field(description="总注数(单关决策 + 串关方案)")
+    settled: int = Field(description="已结算注数")
+    pending: int = Field(description="待结算注数")
+    win_count: int = Field(description="命中注数")
+    hit_rate: float = Field(description="命中率 = 命中 / 已结算")
+    total_stake: float = Field(description="累计模拟投入")
+    total_profit: float = Field(description="累计盈亏(已结算部分)")
+    roi: float = Field(description="ROI = 累计盈亏 / 累计投入")
+    max_win_streak: int = Field(description="最大连红(按比赛时间排序)")
+
+
+class ProfitPointRead(BaseModel):
+    """盈亏曲线数据点。"""
+
+    label: str = Field(description="比赛日期 MM-DD")
+    cumulative_profit: float = Field(description="截至该点的累计盈亏")
+
+
+class DimensionStatRead(BaseModel):
+    """维度分析条目(玩法/赔率区间/联赛)。"""
+
+    name: str
+    count: int = Field(description="已结算选注数")
+    hits: int = Field(description="命中的选注数")
+    hit_rate: float = Field(description="命中率")
+
+
+class ReviewStatsRead(BaseModel):
+    """复盘统计聚合结果。"""
+
+    kpi: ReviewKpiRead
+    profit_curve: list[ProfitPointRead] = Field(description="盈亏曲线(按比赛时间)")
+    by_play: list[DimensionStatRead] = Field(description="按玩法命中分布")
+    by_odds_range: list[DimensionStatRead] = Field(description="按赔率区间命中分布")
+    by_league: list[DimensionStatRead] = Field(description="按联赛命中分布")
+
+
+class ReviewDecisionRead(BaseModel):
+    """复盘单关决策富明细行(联表计算)。"""
+
+    decision_id: int
+    user_id: int
+    match_id: str
+    match_name: str
+    league_name: str
+    match_time: datetime.datetime
+    pool_code: str
+    play_name: str
+    option_code: str
+    option_label: str
+    odds: float | None = Field(description="结算口径赔率,未开奖为 None")
+    stake_amount: float
+    result_label: str | None = Field(description="赛果标签,未开奖为 None")
+    result_status: DecisionStatus
+    profit_loss: float | None

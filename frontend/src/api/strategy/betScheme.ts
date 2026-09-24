@@ -3,7 +3,7 @@
  */
 import request from '../request'
 
-/** 串关方案选注明细 */
+/** 串关方案选注明细(含读时判定的赛果与命中) */
 export interface BetSchemeItem {
   item_id: number
   match_id: string
@@ -13,9 +13,13 @@ export interface BetSchemeItem {
   option_code: string
   option_label: string
   odds: number
+  /** 该腿赛果标签,未开奖为 null */
+  result_label: string | null
+  /** 该腿是否命中,未开奖为 null */
+  is_hit: boolean | null
 }
 
-/** 串关投注方案 */
+/** 串关投注方案(盈亏为读时实时计算,不落库) */
 export interface BetScheme {
   scheme_id: number
   user_id: number
@@ -26,6 +30,8 @@ export interface BetScheme {
   max_odds: number | null
   status: string
   created_at: string
+  /** 盈亏 = 总回报 - 总投入,任一腿未开奖为 null */
+  profit_loss: number | null
   items: BetSchemeItem[]
 }
 

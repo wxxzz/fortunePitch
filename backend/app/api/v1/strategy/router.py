@@ -7,13 +7,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.v1.strategy.schemas import (
     BetSchemeCreate,
     BetSchemeRead,
+    DimensionStatRead,
     OddsHistoryCreate,
     OddsHistoryRead,
     PlanAnalysisRead,
     PlanAnalysisRequest,
-    SelectionAnalysisRead,
+    ProfitPointRead,
     RecommendationCreate,
     RecommendationRead,
+    ReviewDecisionRead,
+    ReviewKpiRead,
+    ReviewStatsRead,
+    SelectionAnalysisRead,
+    SettlementRequest,
+    SettlementResultRead,
     UserDecisionCreate,
     UserDecisionRead,
     UserDecisionsBatchCreate,
@@ -25,8 +32,15 @@ from app.api.v1.strategy.schemas import (
 from app.core.database import get_db_session
 from app.core.exceptions import DataValidationError
 from app.core.security import verify_api_key
-from app.models import BetScheme, MatchGame, OddsHistory, Recommendation, UserDecision
-from app.services import crud, plan_analysis
+from app.models import (
+    BetScheme,
+    DecisionStatus,
+    MatchGame,
+    OddsHistory,
+    Recommendation,
+    UserDecision,
+)
+from app.services import crud, plan_analysis, review, settlement
 from app.services.parlay import ParlayPick, list_bet_schemes, save_bet_scheme
 from app.services.poisson import kelly_fraction
 from app.services.user_picks import UserPick, create_user_picks
@@ -238,9 +252,50 @@ async def list_schemes(
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
-) -> list[BetScheme]:
-    """分页查询串关虚拟投注方案,可按用户过滤,按创建时间倒序。"""
-    return await list_bet_schemes(session, user_id=user_id, offset=offset, limit=limit)
+) -> list[dict]:
+    """分页查询串关虚拟投注方案,可按用户过滤,按创建时间倒序。
+
+    响应附加读时计算的逐腿赛果/命中与方案盈亏
+    (盈亏不落库,每次查询实时结算)。
+    """
+    schemes = await list_bet_schemes(
+        session, user_id=user_id, offset=offset, limit=limit
+    )
+    annotations = await settlement.load_scheme_annotations(session, schemes)
+    payloads: list[dict] = []
+    for scheme in schemes:
+        annotation = annotations[scheme.scheme_id]
+        item_hits: dict[int, tuple[str | None, bool | None]] = annotation["items"]
+        payloads.append(
+            {
+                "scheme_id": scheme.scheme_id,
+                "user_id": scheme.user_id,
+                "parlay_size": scheme.parlay_size,
+                "stake_per_bet": scheme.stake_per_bet,
+                "bet_count": scheme.bet_count,
+                "total_stake": scheme.total_stake,
+                "max_odds": scheme.max_odds,
+                "status": scheme.status,
+                "created_at": scheme.created_at,
+                "profit_loss": annotation["profit_loss"],
+                "items": [
+                    {
+                        "item_id": item.item_id,
+                        "match_id": item.match_id,
+                        "match_name": item.match_name,
+                        "pool_code": item.pool_code,
+                        "play_name": item.play_name,
+                        "option_code": item.option_code,
+                        "option_label": item.option_label,
+                        "odds": item.odds,
+                        "result_label": item_hits[item.item_id][0],
+                        "is_hit": item_hits[item.item_id][1],
+                    }
+                    for item in scheme.items
+                ],
+            }
+        )
+    return payloads
 
 
 # ---------- 投注方案分析 /plan-analysis ----------
@@ -297,6 +352,87 @@ async def analyze_bet_plan(
         expected_value=result.expected_value,
         ev_pct=result.ev_pct,
     )
+
+
+# ---------- 复盘结算 /settlement ----------
+
+@router.post(
+    "/settlement",
+    response_model=SettlementResultRead,
+    status_code=status.HTTP_200_OK,
+    summary="复盘结算(按赛果判定输赢并计算盈亏)",
+)
+async def run_settlement(
+    payload: SettlementRequest, session: AsyncSession = Depends(get_db_session)
+) -> SettlementResultRead:
+    """结算引擎入口:结算待结算的单关决策与串关方案。
+
+    幂等:已结算记录不重复处理;未开奖/赔率不可解析的保持待结算。
+    复盘页加载时自动触发,也可通过「立即结算」手动调用。
+    """
+    result = await settlement.run_settlement(session, payload.user_id)
+    return SettlementResultRead(
+        decision_wins=result.decision_wins,
+        decision_losses=result.decision_losses,
+        scheme_wins=result.scheme_wins,
+        scheme_losses=result.scheme_losses,
+    )
+
+
+# ---------- 复盘统计 /review ----------
+
+@router.get(
+    "/review/stats",
+    response_model=ReviewStatsRead,
+    summary="复盘统计聚合(KPI/盈亏曲线/维度分析)",
+)
+async def get_review_stats(
+    user_id: int | None = Query(default=None, description="按用户过滤"),
+    session: AsyncSession = Depends(get_db_session),
+) -> ReviewStatsRead:
+    """聚合某用户的复盘统计:核心指标、盈亏曲线与维度分析。"""
+    stats = await review.review_stats(session, user_id)
+    return ReviewStatsRead(
+        kpi=ReviewKpiRead(**stats.kpi._asdict()),
+        profit_curve=[
+            ProfitPointRead(label=p.label, cumulative_profit=p.cumulative_profit)
+            for p in stats.profit_curve
+        ],
+        by_play=[
+            DimensionStatRead(**d._asdict()) for d in stats.by_play
+        ],
+        by_odds_range=[
+            DimensionStatRead(**d._asdict()) for d in stats.by_odds_range
+        ],
+        by_league=[
+            DimensionStatRead(**d._asdict()) for d in stats.by_league
+        ],
+    )
+
+
+@router.get(
+    "/review/decisions",
+    response_model=list[ReviewDecisionRead],
+    summary="复盘单关决策富明细",
+)
+async def list_review_decisions(
+    user_id: int | None = Query(default=None, description="按用户过滤"),
+    result_status: DecisionStatus | None = Query(
+        default=None, description="按结算状态过滤:WIN/LOSS/PUSH"
+    ),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=20, ge=1, le=100),
+    session: AsyncSession = Depends(get_db_session),
+) -> list[ReviewDecisionRead]:
+    """查询单关决策富明细(赛事/玩法/选项/赔率/赛果/盈亏联表)。"""
+    rows = await review.list_review_decisions(
+        session,
+        user_id=user_id,
+        result_status=result_status,
+        offset=offset,
+        limit=limit,
+    )
+    return [ReviewDecisionRead(**row._asdict()) for row in rows]
 
 
 # ---------- 凯利指数 /kelly ----------
