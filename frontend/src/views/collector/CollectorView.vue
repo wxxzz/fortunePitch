@@ -24,12 +24,16 @@ import {
   type MatchSyncResult,
   type ResultSyncResult,
 } from '@/api/collector/match'
+import {
+  recomputeTeamRatings,
+  type TeamRatingRecomputeResult,
+} from '@/api/analytics/teamRatings'
 import { useBaseStore } from '@/stores/base'
 
 const baseStore = useBaseStore()
 const { leagues, teams, players, isLoading } = storeToRefs(baseStore)
 
-type SyncKind = 'league' | 'team' | 'player' | 'fundamental' | 'match' | 'result'
+type SyncKind = 'league' | 'team' | 'player' | 'fundamental' | 'match' | 'result' | 'rating'
 
 const leagueName = ref('西甲')
 const matchDate = ref(todayIso())
@@ -45,6 +49,7 @@ const fundamentalResult = ref<TeamFundamentalsSyncResult | null>(null)
 const playerResult = ref<PlayerSyncResult | null>(null)
 const matchResult = ref<MatchSyncResult | null>(null)
 const resultSyncOutcome = ref<ResultSyncResult | null>(null)
+const ratingResult = ref<TeamRatingRecomputeResult | null>(null)
 
 /** 快捷入口:竞彩网热门联赛简称 */
 const QUICK_LEAGUES = ['西甲', '英超', '德甲', '意甲', '法甲'] as const
@@ -67,6 +72,8 @@ const syncingHint = computed(() => {
       return '正在拉取竞彩网在售赛程…'
     case 'result':
       return '正在拉取竞彩网赛果开奖数据…'
+    case 'rating':
+      return '正在回放已完赛看板赛果,重建球队 Elo 评分…'
     default:
       return ''
   }
@@ -86,7 +93,8 @@ onMounted(() => {
 /** 统一的同步执行入口:互斥执行,完成后刷新档案列表 */
 async function runSync(kind: SyncKind, task: () => Promise<void>): Promise<void> {
   if (isSyncing.value) return
-  if (kind !== 'match' && kind !== 'result' && !leagueName.value.trim()) return
+  const needsLeague = kind !== 'match' && kind !== 'result' && kind !== 'rating'
+  if (needsLeague && !leagueName.value.trim()) return
   isSyncing.value = true
   syncingKind.value = kind
   syncError.value = null
@@ -109,6 +117,7 @@ function clearResults(keep: SyncKind): void {
   if (keep !== 'player') playerResult.value = null
   if (keep !== 'match') matchResult.value = null
   if (keep !== 'result') resultSyncOutcome.value = null
+  if (keep !== 'rating') ratingResult.value = null
 }
 
 function handleSyncLeague(): Promise<void> {
@@ -150,6 +159,13 @@ function handleSyncResult(): Promise<void> {
   return runSync('result', async () => {
     resultSyncOutcome.value = await syncResults(resultDate.value)
     clearResults('result')
+  })
+}
+
+function handleRecomputeRatings(): Promise<void> {
+  return runSync('rating', async () => {
+    ratingResult.value = await recomputeTeamRatings()
+    clearResults('rating')
   })
 }
 </script>
@@ -282,6 +298,26 @@ function handleSyncResult(): Promise<void> {
         比赛日与竞彩赛果开奖页(sporttery.cn/jc/zqsgkj)的日期一致。
         场次须已在赛事档案中,比分有效的场次会同步回写比赛比分与完赛状态;
         同步后可在"赛果开奖"页查看各玩法开奖结果。
+      </p>
+
+      <div class="collector__divider" role="separator"></div>
+
+      <div class="collector__form">
+        <span class="collector__label">派生数据</span>
+        <div class="collector__actions">
+          <button
+            class="collector__btn"
+            type="button"
+            :disabled="isSyncing"
+            @click="handleRecomputeRatings"
+          >
+            重算 Elo 评分
+          </button>
+        </div>
+      </div>
+      <p class="collector__quick-label collector__match-hint">
+        基于已同步的球队看板赛果按时间序全量回放,重建各队当前 Elo 评分(幂等,重复执行结果一致)。
+        赛事详情页"高阶数据"Tab 与 AI 综合分析会引用该评分。
       </p>
 
       <p v-if="syncingHint" class="collector__hint">{{ syncingHint }}</p>
@@ -470,6 +506,31 @@ function handleSyncResult(): Promise<void> {
           ⚠ 以下场次未入库已跳过:{{
             resultSyncOutcome.skipped_matches.join(';')
           }}
+        </p>
+      </div>
+
+      <!-- Elo 评分重算结果 -->
+      <div v-if="ratingResult" class="collector__result">
+        <div class="collector__result-head">
+          <span class="collector__result-badge">Elo 评分已重算</span>
+          <strong>球队 Elo 评分(看板赛果回放)</strong>
+        </div>
+        <dl class="collector__result-fields">
+          <div>
+            <dt>回放场次</dt>
+            <dd>{{ ratingResult.matches_replayed }}</dd>
+          </div>
+          <div>
+            <dt>评分球队</dt>
+            <dd>{{ ratingResult.teams_rated }}</dd>
+          </div>
+          <div>
+            <dt>跳过场次</dt>
+            <dd>{{ ratingResult.matches_skipped }}</dd>
+          </div>
+        </dl>
+        <p v-if="ratingResult.matches_skipped > 0" class="collector__result-note">
+          ⚠ 部分场次因对手球队未建档无法解析,已跳过
         </p>
       </div>
     </div>

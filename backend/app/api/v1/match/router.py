@@ -17,6 +17,7 @@ from app.api.v1.match.schemas import (
     MatchEventRead,
     MatchGameCreate,
     MatchGameRead,
+    MatchInsightsRead,
     MatchOddsSnapshotRead,
     MatchResultRead,
     MatchScoreUpdate,
@@ -32,7 +33,7 @@ from app.models import (
     MatchOddsSnapshot,
     MatchStatus,
 )
-from app.services import crud, llm, llm_fundamental, llm_odds_trend, llm_query
+from app.services import crud, insights, llm, llm_fundamental, llm_odds_trend, llm_query
 
 router = APIRouter(prefix="/match", tags=["match"], dependencies=[Depends(verify_api_key)])
 
@@ -130,6 +131,32 @@ async def list_odds_snapshots(
     )
     result = await session.execute(stmt)
     return list(result.scalars().all())
+
+
+@router.get(
+    "/games/{match_id}/insights",
+    response_model=MatchInsightsRead,
+    summary="查询比赛高阶数据(近况/交锋/Elo/攻防强度/泊松概率)",
+)
+async def get_match_insights(
+    match_id: str,
+    form_limit: int = Query(default=6, ge=1, le=20),
+    h2h_limit: int = Query(default=10, ge=1, le=30),
+    session: AsyncSession = Depends(get_db_session),
+) -> MatchInsightsRead:
+    """查询单场比赛高阶数据(读时实时派生,不落库)。
+
+    - 球队近况 / 历史交锋:来自 fp_base_team_matches 已完赛看板行;
+    - Elo 快照:来自 fp_analytics_team_ratings(POST /analytics/team-ratings/recompute 重算);
+    - 攻防强度 λ/μ 与泊松概率:积分榜主客拆分 × 近况混合 + Dixon-Coles 模型。
+
+    Raises:
+        ResourceNotFoundError: 比赛不存在。
+    """
+    data = await insights.get_match_insights(
+        session, match_id, form_limit=form_limit, h2h_limit=h2h_limit
+    )
+    return MatchInsightsRead.from_insights(data)
 
 
 @router.patch("/games/{match_id}/score", response_model=MatchGameRead)

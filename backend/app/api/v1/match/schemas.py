@@ -1,10 +1,14 @@
 """比赛与赛果模块 Pydantic Schema:比赛 / 事件。"""
 
 import datetime
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models import MatchStatus
+
+if TYPE_CHECKING:
+    from app.services.insights import MatchInsights, TeamForm
 
 
 # ---------- 比赛 ----------
@@ -319,3 +323,233 @@ class MatchEventRead(BaseModel):
     event_minute: int
     player_id: int | None
     is_home_team: bool
+
+
+# ---------- 高阶数据(insights) ----------
+
+class InsightsFormEntryRead(BaseModel):
+    """近况明细行(看板球队视角)。"""
+
+    match_time: datetime.datetime = Field(description="开赛时间")
+    league_name: str | None = Field(default=None, description="赛事名称")
+    opponent_name: str = Field(description="对手名称")
+    is_home: bool = Field(description="看板球队是否为主队")
+    score: str = Field(description="全场比分(主:客),如 2:1")
+    result: str = Field(description="看板球队视角结果:W/D/L")
+
+
+class InsightsTeamFormRead(BaseModel):
+    """球队近况汇总。"""
+
+    team_id: int = Field(description="球队 ID")
+    team_name: str = Field(description="球队名称")
+    entries: list[InsightsFormEntryRead] = Field(description="近况明细(时间倒序)")
+    results: str = Field(description="结果串(时间倒序,最早在左),如 WWDLLW")
+    wins: int = Field(description="胜场数")
+    draws: int = Field(description="平局数")
+    losses: int = Field(description="负场数")
+    goals_for_avg: float = Field(description="场均进球")
+    goals_against_avg: float = Field(description="场均失球")
+    streak_label: str = Field(description="状态标签,如 连胜 3 场")
+
+
+class InsightsH2HEntryRead(BaseModel):
+    """历史交锋明细行(按行自身主队视角)。"""
+
+    match_time: datetime.datetime = Field(description="开赛时间")
+    league_name: str | None = Field(default=None, description="赛事名称")
+    home_team_name: str = Field(description="该场主队名称")
+    away_team_name: str = Field(description="该场客队名称")
+    score: str = Field(description="全场比分(主:客)")
+    home_result: str = Field(description="该场主队视角结果:W/D/L")
+
+
+class InsightsH2HRead(BaseModel):
+    """历史交锋汇总(胜平负以本场主队视角)。"""
+
+    entries: list[InsightsH2HEntryRead] = Field(description="交锋明细(时间倒序)")
+    home_wins: int = Field(description="本场主队胜场数")
+    draws: int = Field(description="平局数")
+    away_wins: int = Field(description="本场客队胜场数")
+    avg_total_goals: float | None = Field(default=None, description="场均总进球")
+
+
+class InsightsEloRead(BaseModel):
+    """双方 Elo 快照(未重算时 rating 各值为 None)。"""
+
+    home_rating: float | None = Field(default=None, description="主队 Elo 评分")
+    away_rating: float | None = Field(default=None, description="客队 Elo 评分")
+    rating_diff: float | None = Field(default=None, description="评分差(主-客)")
+    home_expected_score: float | None = Field(
+        default=None, description="主队期望得分(含主场优势)"
+    )
+    home_matches_played: int = Field(description="主队参与评分场次")
+    away_matches_played: int = Field(description="客队参与评分场次")
+
+
+class InsightsStrengthRead(BaseModel):
+    """攻防强度与期望进球估计。"""
+
+    league_avg_home_goals: float | None = Field(
+        default=None, description="联赛主队场均进球"
+    )
+    league_avg_away_goals: float | None = Field(
+        default=None, description="联赛客队场均进球"
+    )
+    home_attack: float | None = Field(
+        default=None, description="主队进攻强度(1.00=联赛均值)"
+    )
+    home_defense: float | None = Field(default=None, description="主队防守强度(失球比)")
+    away_attack: float | None = Field(default=None, description="客队进攻强度")
+    away_defense: float | None = Field(default=None, description="客队防守强度")
+    lam: float | None = Field(default=None, description="主队期望进球")
+    mu: float | None = Field(default=None, description="客队期望进球")
+
+
+class InsightsScoreProbRead(BaseModel):
+    """比分概率条目。"""
+
+    home_goals: int = Field(description="主队进球数")
+    away_goals: int = Field(description="客队进球数")
+    probability: float = Field(description="概率(0~1)")
+
+
+class InsightsTtgBinRead(BaseModel):
+    """总进球分布桶。"""
+
+    goals: int = Field(description="总进球数(0..6,7 表示 7+)")
+    probability: float = Field(description="概率(0~1)")
+
+
+class InsightsPoissonRead(BaseModel):
+    """Dixon-Coles 泊松比分预测。"""
+
+    home_win: float = Field(description="主胜概率")
+    draw: float = Field(description="平局概率")
+    away_win: float = Field(description="客胜概率")
+    top_scores: list[InsightsScoreProbRead] = Field(
+        description="最可能比分(前5,概率降序)"
+    )
+    over_2_5: float = Field(description="大于 2.5 球概率")
+    under_2_5: float = Field(description="不大于 2.5 球概率")
+    total_goals_dist: list[InsightsTtgBinRead] = Field(
+        description="总进球分布(0..6 与 7+)"
+    )
+    total_goals_expected: float = Field(description="总进球期望")
+
+
+class MatchInsightsRead(BaseModel):
+    """单场比赛高阶数据聚合响应(详情页 高阶数据/历史交锋 Tab)。"""
+
+    match_id: str = Field(description="比赛 ID")
+    league_name: str = Field(description="联赛名称")
+    match_time: datetime.datetime = Field(description="开赛时间")
+    home_team_name: str = Field(description="主队名称")
+    away_team_name: str = Field(description="客队名称")
+    elo: InsightsEloRead = Field(description="Elo 快照")
+    home_form: InsightsTeamFormRead = Field(description="主队近况")
+    away_form: InsightsTeamFormRead = Field(description="客队近况")
+    h2h: InsightsH2HRead = Field(description="历史交锋")
+    strength: InsightsStrengthRead = Field(description="攻防强度与期望进球")
+    poisson: InsightsPoissonRead | None = Field(
+        default=None, description="泊松预测(攻防数据不足时为 None)"
+    )
+
+    @classmethod
+    def from_insights(cls, data: "MatchInsights") -> "MatchInsightsRead":
+        """由服务层 MatchInsights NamedTuple 组装响应模型。"""
+        game = data.game
+        return cls(
+            match_id=game.match_id,
+            league_name=game.league.league_name,
+            match_time=game.match_time,
+            home_team_name=game.home_team.team_name,
+            away_team_name=game.away_team.team_name,
+            elo=InsightsEloRead(
+                home_rating=data.elo.home_rating,
+                away_rating=data.elo.away_rating,
+                rating_diff=data.elo.rating_diff,
+                home_expected_score=data.elo.home_expected_score,
+                home_matches_played=data.elo.home_matches_played,
+                away_matches_played=data.elo.away_matches_played,
+            ),
+            home_form=_form_to_read(data.home_form),
+            away_form=_form_to_read(data.away_form),
+            h2h=InsightsH2HRead(
+                entries=[
+                    InsightsH2HEntryRead(
+                        match_time=entry.match_time,
+                        league_name=entry.league_name,
+                        home_team_name=entry.home_team_name,
+                        away_team_name=entry.away_team_name,
+                        score=f"{entry.home_goals}:{entry.away_goals}",
+                        home_result=entry.home_result,
+                    )
+                    for entry in data.h2h.entries
+                ],
+                home_wins=data.h2h.home_wins,
+                draws=data.h2h.draws,
+                away_wins=data.h2h.away_wins,
+                avg_total_goals=data.h2h.avg_total_goals,
+            ),
+            strength=InsightsStrengthRead(
+                league_avg_home_goals=data.strength.league_avg_home_goals,
+                league_avg_away_goals=data.strength.league_avg_away_goals,
+                home_attack=data.strength.home_attack,
+                home_defense=data.strength.home_defense,
+                away_attack=data.strength.away_attack,
+                away_defense=data.strength.away_defense,
+                lam=data.strength.lam,
+                mu=data.strength.mu,
+            ),
+            poisson=(
+                InsightsPoissonRead(
+                    home_win=data.poisson.home_win,
+                    draw=data.poisson.draw,
+                    away_win=data.poisson.away_win,
+                    top_scores=[
+                        InsightsScoreProbRead(
+                            home_goals=home_goals,
+                            away_goals=away_goals,
+                            probability=probability,
+                        )
+                        for home_goals, away_goals, probability in data.poisson.top_scores
+                    ],
+                    over_2_5=data.poisson.over_2_5,
+                    under_2_5=data.poisson.under_2_5,
+                    total_goals_dist=[
+                        InsightsTtgBinRead(goals=goals, probability=probability)
+                        for goals, probability in data.poisson.total_goals_dist
+                    ],
+                    total_goals_expected=data.poisson.total_goals_expected,
+                )
+                if data.poisson is not None
+                else None
+            ),
+        )
+
+
+def _form_to_read(form: "TeamForm") -> InsightsTeamFormRead:
+    """由服务层 TeamForm NamedTuple 组装近况响应模型。"""
+    return InsightsTeamFormRead(
+        team_id=form.team_id,
+        team_name=form.team_name,
+        entries=[
+            InsightsFormEntryRead(
+                match_time=entry.match_time,
+                league_name=entry.league_name,
+                opponent_name=entry.opponent_name,
+                is_home=entry.is_home,
+                score=f"{entry.home_goals}:{entry.away_goals}",
+                result=entry.result,
+            )
+            for entry in form.entries
+        ],
+        results=form.results,
+        wins=form.wins,
+        draws=form.draws,
+        losses=form.losses,
+        goals_for_avg=form.goals_for_avg,
+        goals_against_avg=form.goals_against_avg,
+        streak_label=form.streak_label,
+    )

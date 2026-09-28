@@ -1,4 +1,6 @@
-"""高阶数据分析模块 Pydantic Schema:球队指标 / 球员表现 / 泊松预测。"""
+"""高阶数据分析模块 Pydantic Schema:球队指标 / 球员表现 / 泊松预测 / Elo 评分。"""
+
+import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -93,3 +95,27 @@ class PoissonPredictResponse(BaseModel):
     probabilities: MatchProbabilities
     top_scores: list[ScoreProbability] = Field(description="概率最高的前 5 个比分")
     total_goals_expected: float
+
+
+# ---------- Elo 评分 /team-ratings ----------
+
+class TeamRatingRead(BaseModel):
+    """球队 Elo 评分响应模型。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    team_id: int
+    rating: float = Field(description="当前 Elo 评分")
+    matches_played: int = Field(description="参与评分场次")
+    last_match_time: datetime.datetime | None = Field(
+        default=None, description="最近一场参与评分比赛的开赛时间"
+    )
+    update_time: datetime.datetime = Field(description="评分更新时间")
+
+
+class TeamRatingRecomputeRead(BaseModel):
+    """Elo 评分重算结果摘要。"""
+
+    matches_replayed: int = Field(description="实际参与回放的比赛数")
+    teams_rated: int = Field(description="写入评分表的球队数")
+    matches_skipped: int = Field(description="因对手无法解析而跳过的比赛数")

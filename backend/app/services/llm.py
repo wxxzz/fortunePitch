@@ -39,6 +39,7 @@ from app.models import (
     MatchStatus,
     TeamFundamentals,
 )
+from app.services import insights
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +102,9 @@ class MatchAnalysisContext:
     # 作为综合分析的逻辑依据随提示词一并注入
     fundamental_analysis: MatchLlmFundAnalysis | None = None
     trend_analysis: MatchLlmTrendAnalysis | None = None
+    # 高阶数据摘要(近况/交锋/Elo/强度/泊松,由 insights 服务派生;
+    # 聚合失败时为 None,不阻断主分析)
+    insights_text: str | None = None
 
 
 class LlmPlayRecommendation(BaseModel):
@@ -199,6 +203,15 @@ async def build_match_analysis_context(
     ).scalar_one_or_none()
 
     pools = list(game.odds.pools) if game.odds is not None else []
+
+    # 高阶数据摘要(近况/交锋/Elo/强度/泊松):聚合失败只降级,不阻断主分析
+    try:
+        insights_data = await insights.get_match_insights(session, match_id)
+        insights_text = insights.format_insights_summary(insights_data)
+    except Exception:
+        logger.warning("高阶数据聚合失败,跳过该证据段", exc_info=True)
+        insights_text = None
+
     return MatchAnalysisContext(
         match_id=game.match_id,
         league_name=game.league.league_name,
@@ -212,6 +225,7 @@ async def build_match_analysis_context(
         pools=pools,
         fundamental_analysis=fundamental_analysis,
         trend_analysis=trend_analysis,
+        insights_text=insights_text,
     )
 
 
@@ -348,6 +362,9 @@ def build_analysis_messages(context: MatchAnalysisContext) -> list[dict[str, str
         f"{_format_fundamentals(context.away_team_name, context.away_fundamentals, '')}\n"
         f"{_format_fundamentals(context.away_team_name, context.away_fundamentals, 'home_')}\n"
         f"{_format_fundamentals(context.away_team_name, context.away_fundamentals, 'away_')}\n"
+        f"\n"
+        f"【高阶数据(系统模型派生,非外部数据)】\n"
+        f"{context.insights_text or '- 高阶数据暂不可用(该维度参考缺失)'}\n"
         f"\n"
         f"【在售玩法赔率】\n"
         f"{_format_pools(context.pools)}\n"

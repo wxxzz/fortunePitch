@@ -11,13 +11,14 @@ from app.api.v1.analytics.schemas import (
     PoissonPredictResponse,
     MatchProbabilities,
     ScoreProbability,
+    TeamRatingRecomputeRead,
     TeamStatCreate,
     TeamStatRead,
 )
 from app.core.database import get_db_session
 from app.core.security import verify_api_key
 from app.models import MatchGame, PlayerMatchPerformance, TeamMatchStat
-from app.services import crud
+from app.services import crud, team_rating
 from app.services.poisson import predict_score_grid
 
 router = APIRouter(
@@ -60,6 +61,29 @@ async def delete_team_stat(
 ) -> None:
     """删除球队指标记录。"""
     await crud.delete_entity(session, TeamMatchStat, stat_id)
+
+
+# ---------- Elo 评分 /team-ratings ----------
+
+@router.post(
+    "/team-ratings/recompute",
+    response_model=TeamRatingRecomputeRead,
+    status_code=status.HTTP_200_OK,
+    summary="全量重算球队 Elo 评分(按时间序回放已完赛看板比赛)",
+)
+async def recompute_team_ratings(
+    session: AsyncSession = Depends(get_db_session),
+) -> TeamRatingRecomputeRead:
+    """按时间序回放全部已完赛看板比赛,全量重建球队 Elo 评分。
+
+    幂等:重复调用结果一致(delete + 批量 insert 的全量重建)。
+    """
+    result = await team_rating.recompute_team_ratings(session)
+    return TeamRatingRecomputeRead(
+        matches_replayed=result.matches_replayed,
+        teams_rated=result.teams_rated,
+        matches_skipped=result.matches_skipped,
+    )
 
 
 # ---------- 球员表现 /player-stats ----------

@@ -8,11 +8,11 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { useMatchStore } from '@/stores/match'
-import { useAnalyticsStore } from '@/stores/analytics'
 import { useStrategyStore } from '@/stores/strategy'
 import { useBaseStore } from '@/stores/base'
 import { getGame, type MatchGame } from '@/api/match/game'
 import { listOddsSnapshots, type MatchOddsSnapshot } from '@/api/match/oddsSnapshot'
+import { getMatchInsights, type MatchInsights } from '@/api/match/insights'
 import {
   getLlmAnalysis,
   getLlmFundamentalAnalysis,
@@ -39,7 +39,6 @@ const router = useRouter()
 const matchId = route.params.matchId as string
 
 const matchStore = useMatchStore()
-const analyticsStore = useAnalyticsStore()
 const strategyStore = useStrategyStore()
 const baseStore = useBaseStore()
 const { teams } = storeToRefs(baseStore)
@@ -52,7 +51,6 @@ const isShapLoading = ref(true)
 
 onMounted(async () => {
   void baseStore.fetchAll()
-  void analyticsStore.fetchTeamStats(matchId)
   void strategyStore.fetchAll()
   void loadSavedAnalysis()
   void loadSavedFundamentalAnalysis()
@@ -185,9 +183,69 @@ const teamName = (teamId: number): string =>
 const TABS = ['基本面', '历史交锋', '高阶数据', '赔率走势', '策略推荐', 'AI 分析'] as const
 const activeTab = ref<(typeof TABS)[number]>('策略推荐')
 
+// ---------- 高阶数据 / 历史交锋 Tab 数据(懒加载,payload 两 Tab 共享) ----------
+
+const insights = ref<MatchInsights | null>(null)
+const isInsightsLoading = ref(false)
+const insightsError = ref<string | null>(null)
+const hasInsightsLoaded = ref(false)
+
+watch(
+  activeTab,
+  (tab) => {
+    if (
+      (tab === '高阶数据' || tab === '历史交锋') &&
+      !hasInsightsLoaded.value &&
+      !isInsightsLoading.value
+    ) {
+      void loadInsights()
+    }
+  },
+  // immediate:即使未来默认 Tab 直接是高阶数据/历史交锋也能触发首次加载
+  { immediate: true },
+)
+
+async function loadInsights(): Promise<void> {
+  isInsightsLoading.value = true
+  insightsError.value = null
+  try {
+    insights.value = await getMatchInsights(matchId)
+    // 成功后才标记已加载,失败时切回本 Tab 可重试
+    hasInsightsLoaded.value = true
+  } catch (err) {
+    insightsError.value = err instanceof Error ? err.message : '高阶数据加载失败'
+  } finally {
+    isInsightsLoading.value = false
+  }
+}
+
+/** W/D/L -> 语义色圆点类(红=胜=正向 / 灰=平 / 绿=负=负向,与项目色语义一致) */
+const RESULT_DOT_CLASS: Record<string, string> = {
+  W: 'match-detail__form-dot--w',
+  D: 'match-detail__form-dot--d',
+  L: 'match-detail__form-dot--l',
+}
+
+/** 概率(0~1)转百分比文本 */
+const pct = (value: number): string => `${(value * 100).toFixed(0)}%`
+
+/** 时间串转 YYYY-MM-DD */
+function formatMatchDate(value: string): string {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+}
+
+/** Top 比分概率条宽度(相对最高概率归一,便于横向对比) */
+function scoreBarWidth(probability: number): string {
+  const top = insights.value?.poisson?.top_scores[0]?.probability ?? 0
+  if (top <= 0) return '0%'
+  return `${Math.round((probability / top) * 100)}%`
+}
+
 // ---------- 策略推荐 Tab 数据 ----------
 
-const { teamStats } = storeToRefs(analyticsStore)
 const { recommendations } = storeToRefs(strategyStore)
 
 /** 本场置信度最高的推荐 */
@@ -513,26 +571,174 @@ async function loadSavedFundamentalAnalysis(): Promise<void> {
         </div>
 
         <div v-else-if="activeTab === '高阶数据'" class="match-detail__panel">
-          <table class="match-detail__table">
-            <thead>
-              <tr>
-                <th>球队 ID</th><th>xG</th><th>xGA</th><th>控球率</th><th>射正率</th><th>PPDA</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="stat in teamStats" :key="stat.stat_id">
-                <td>{{ stat.team_id }}</td>
-                <td>{{ stat.xg ?? '-' }}</td>
-                <td>{{ stat.xga ?? '-' }}</td>
-                <td>{{ stat.possession !== null ? `${stat.possession}%` : '-' }}</td>
-                <td>{{ stat.shot_accuracy !== null ? `${stat.shot_accuracy}%` : '-' }}</td>
-                <td>{{ stat.ppda ?? '-' }}</td>
-              </tr>
-              <tr v-if="teamStats.length === 0">
-                <td colspan="6" class="match-detail__hint">暂无本场高阶数据</td>
-              </tr>
-            </tbody>
-          </table>
+          <p v-if="insightsError" class="match-detail__error" role="alert">{{ insightsError }}</p>
+          <SkeletonBlock v-if="isInsightsLoading" :height="320" label="加载高阶数据…" />
+          <template v-else-if="insights">
+            <!-- Elo 评分 -->
+            <h3 class="match-detail__section-title">Elo 评分</h3>
+            <div class="match-detail__duel">
+              <div class="match-detail__duel-side">
+                <strong class="match-detail__duel-name">{{ insights.home_team_name }}</strong>
+                <span class="match-detail__duel-value">
+                  {{ insights.elo.home_rating !== null ? insights.elo.home_rating.toFixed(0) : '未评分' }}
+                </span>
+                <span class="match-detail__hint">已计 {{ insights.elo.home_matches_played }} 场</span>
+              </div>
+              <div class="match-detail__duel-center">
+                <span class="match-detail__duel-diff">
+                  {{
+                    insights.elo.rating_diff !== null
+                      ? `评分差 ${insights.elo.rating_diff > 0 ? '+' : ''}${insights.elo.rating_diff.toFixed(0)}`
+                      : '待重算'
+                  }}
+                </span>
+                <template v-if="insights.elo.home_expected_score !== null">
+                  <div class="match-detail__duel-bar" role="presentation">
+                    <span
+                      class="match-detail__duel-bar-home"
+                      :style="{ width: pct(insights.elo.home_expected_score) }"
+                    />
+                  </div>
+                  <span class="match-detail__hint">
+                    主队期望得分 {{ pct(insights.elo.home_expected_score) }}(含主场优势)
+                  </span>
+                </template>
+              </div>
+              <div class="match-detail__duel-side">
+                <strong class="match-detail__duel-name">{{ insights.away_team_name }}</strong>
+                <span class="match-detail__duel-value">
+                  {{ insights.elo.away_rating !== null ? insights.elo.away_rating.toFixed(0) : '未评分' }}
+                </span>
+                <span class="match-detail__hint">已计 {{ insights.elo.away_matches_played }} 场</span>
+              </div>
+            </div>
+            <p v-if="insights.elo.home_rating === null || insights.elo.away_rating === null" class="match-detail__hint">
+              Elo 评分由球队看板赛果按时间序回放计算,同步看板数据并由系统重算后生成
+            </p>
+
+            <!-- 近期状态对比 -->
+            <h3 class="match-detail__section-title">近期状态对比</h3>
+            <div class="match-detail__form-grid">
+              <article
+                v-for="form in [insights.home_form, insights.away_form]"
+                :key="form.team_id"
+                class="match-detail__form-card"
+              >
+                <header class="match-detail__form-head">
+                  <strong>{{ form.team_name }}</strong>
+                  <span class="match-detail__form-streak">{{ form.streak_label }}</span>
+                </header>
+                <div v-if="form.results" class="match-detail__form-dots">
+                  <span
+                    v-for="(result, index) in form.results"
+                    :key="index"
+                    class="match-detail__form-dot"
+                    :class="RESULT_DOT_CLASS[result] ?? RESULT_DOT_CLASS.D"
+                  >
+                    {{ result }}
+                  </span>
+                </div>
+                <p v-else class="match-detail__hint">无近期已赛记录</p>
+                <p class="match-detail__form-stats">
+                  {{ form.wins }}胜 {{ form.draws }}平 {{ form.losses }}负 ·
+                  场均进 {{ form.goals_for_avg }} 失 {{ form.goals_against_avg }}
+                </p>
+              </article>
+            </div>
+            <p class="match-detail__hint">结果圆点按时间倒序排列(最左为最近一场):红=胜 / 灰=平 / 绿=负</p>
+
+            <!-- 攻防强度 -->
+            <h3 class="match-detail__section-title">攻防强度(Dixon-Coles)</h3>
+            <table v-if="insights.strength.home_attack !== null" class="match-detail__table">
+              <thead>
+                <tr>
+                  <th>指标</th>
+                  <th>{{ insights.home_team_name }}</th>
+                  <th>{{ insights.away_team_name }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>进攻强度</td>
+                  <td>{{ insights.strength.home_attack?.toFixed(2) }}</td>
+                  <td>{{ insights.strength.away_attack?.toFixed(2) }}</td>
+                </tr>
+                <tr>
+                  <td>防守强度(失球比,越低越好)</td>
+                  <td>{{ insights.strength.home_defense?.toFixed(2) }}</td>
+                  <td>{{ insights.strength.away_defense?.toFixed(2) }}</td>
+                </tr>
+                <tr>
+                  <td>期望进球</td>
+                  <td>λ = {{ insights.strength.lam?.toFixed(2) }}</td>
+                  <td>μ = {{ insights.strength.mu?.toFixed(2) }}</td>
+                </tr>
+              </tbody>
+            </table>
+            <p v-else class="match-detail__hint">攻防数据不足(需联赛积分榜数据)</p>
+            <p v-if="insights.strength.league_avg_home_goals !== null" class="match-detail__hint">
+              1.00 = 联赛均值 · 联赛基准:主队场均
+              {{ insights.strength.league_avg_home_goals.toFixed(2) }} 球 / 客队场均
+              {{ insights.strength.league_avg_away_goals?.toFixed(2) }} 球
+            </p>
+
+            <!-- 模型概率 -->
+            <h3 class="match-detail__section-title">模型概率(泊松比分分布)</h3>
+            <template v-if="insights.poisson">
+              <div class="match-detail__prob" role="presentation">
+                <span
+                  class="match-detail__prob-seg match-detail__prob-seg--home"
+                  :style="{ width: pct(insights.poisson.home_win) }"
+                >
+                  主胜 {{ pct(insights.poisson.home_win) }}
+                </span>
+                <span
+                  class="match-detail__prob-seg match-detail__prob-seg--draw"
+                  :style="{ width: pct(insights.poisson.draw) }"
+                >
+                  平 {{ pct(insights.poisson.draw) }}
+                </span>
+                <span
+                  class="match-detail__prob-seg match-detail__prob-seg--away"
+                  :style="{ width: pct(insights.poisson.away_win) }"
+                >
+                  客胜 {{ pct(insights.poisson.away_win) }}
+                </span>
+              </div>
+              <div class="match-detail__insight-cols">
+                <div class="match-detail__insight-col">
+                  <h4 class="match-detail__sub-title">最可能比分(Top 5)</h4>
+                  <ul class="match-detail__score-list">
+                    <li
+                      v-for="score in insights.poisson.top_scores"
+                      :key="`${score.home_goals}-${score.away_goals}`"
+                    >
+                      <span class="match-detail__score-label">{{ score.home_goals }} : {{ score.away_goals }}</span>
+                      <span class="match-detail__score-bar" role="presentation">
+                        <span :style="{ width: scoreBarWidth(score.probability) }" />
+                      </span>
+                      <span class="match-detail__score-prob">{{ pct(score.probability) }}</span>
+                    </li>
+                  </ul>
+                </div>
+                <div class="match-detail__insight-col">
+                  <h4 class="match-detail__sub-title">总进球与大小球</h4>
+                  <p class="match-detail__form-stats">
+                    大于 2.5 球 {{ pct(insights.poisson.over_2_5) }} ·
+                    不大于 2.5 球 {{ pct(insights.poisson.under_2_5) }}
+                  </p>
+                  <p class="match-detail__form-stats">
+                    总进球期望 {{ insights.poisson.total_goals_expected.toFixed(2) }} 球
+                  </p>
+                </div>
+              </div>
+              <p class="match-detail__hint">
+                概率由 λ/μ 双泊松(Dixon-Coles 低分修正)推导,非外部数据 · 仅供参考
+              </p>
+            </template>
+            <p v-else class="match-detail__hint">攻防数据不足,无法计算泊松概率</p>
+          </template>
+          <p v-else class="match-detail__hint">暂无高阶数据</p>
         </div>
 
         <div v-else-if="activeTab === '赔率走势'" class="match-detail__panel">
@@ -783,7 +989,54 @@ async function loadSavedFundamentalAnalysis(): Promise<void> {
         </div>
 
         <div v-else-if="activeTab === '历史交锋'" class="match-detail__panel">
-          <p class="match-detail__hint">历史交锋记录待数据源接入后展示。</p>
+          <p v-if="insightsError" class="match-detail__error" role="alert">{{ insightsError }}</p>
+          <SkeletonBlock v-if="isInsightsLoading" :height="240" label="加载历史交锋…" />
+          <template v-else-if="insights && insights.h2h.entries.length > 0">
+            <div class="match-detail__h2h-summary">
+              <span class="match-detail__h2h-badge match-detail__h2h-badge--home">
+                {{ insights.home_team_name }} {{ insights.h2h.home_wins }} 胜
+              </span>
+              <span class="match-detail__h2h-badge match-detail__h2h-badge--draw">
+                {{ insights.h2h.draws }} 平
+              </span>
+              <span class="match-detail__h2h-badge match-detail__h2h-badge--away">
+                {{ insights.away_team_name }} {{ insights.h2h.away_wins }} 胜
+              </span>
+              <span v-if="insights.h2h.avg_total_goals !== null" class="match-detail__hint">
+                近 {{ insights.h2h.entries.length }} 次交锋 ·
+                场均总进球 {{ insights.h2h.avg_total_goals }}
+              </span>
+            </div>
+            <table class="match-detail__table">
+              <thead>
+                <tr>
+                  <th>日期</th><th>对阵</th><th>比分</th><th>该场主队结果</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(entry, index) in insights.h2h.entries" :key="index">
+                  <td>{{ formatMatchDate(entry.match_time) }}</td>
+                  <td>{{ entry.home_team_name }} vs {{ entry.away_team_name }}</td>
+                  <td>{{ entry.score }}</td>
+                  <td>
+                    <span
+                      class="match-detail__form-dot"
+                      :class="RESULT_DOT_CLASS[entry.home_result] ?? RESULT_DOT_CLASS.D"
+                    >
+                      {{ entry.home_result }}
+                    </span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <p class="match-detail__hint">
+              历史交锋由双方球队看板赛果交叉推导(按本场主队视角统计) ·
+              在“数据采集”页同步球队看板后更新
+            </p>
+          </template>
+          <p v-else class="match-detail__hint">
+            暂无历史交锋记录。请在“数据采集”页同步双方球队看板,两队交手记录将自动汇总。
+          </p>
         </div>
 
         <div v-else-if="activeTab === 'AI 分析'" class="match-detail__panel">
@@ -1216,6 +1469,244 @@ async function loadSavedFundamentalAnalysis(): Promise<void> {
     &--even {
       background: vars.$color-surface-hover;
       color: vars.$color-text-secondary;
+    }
+  }
+
+  &__duel {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    gap: vars.$spacing-lg;
+    padding: vars.$spacing-lg;
+    background: vars.$color-surface;
+    border: 1px solid vars.$color-border;
+    border-radius: vars.$border-radius;
+  }
+
+  &__duel-side {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: vars.$spacing-xs;
+  }
+
+  &__duel-name {
+    font-size: vars.$font-size-md;
+  }
+
+  &__duel-value {
+    font-size: 26px;
+    font-weight: 700;
+    color: vars.$color-text-primary;
+  }
+
+  &__duel-center {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: vars.$spacing-xs;
+    min-width: 200px;
+  }
+
+  &__duel-diff {
+    font-size: vars.$font-size-sm;
+    color: vars.$color-text-secondary;
+  }
+
+  &__duel-bar {
+    width: 100%;
+    height: 8px;
+    background: rgba(30, 100, 190, 0.25);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+
+  &__duel-bar-home {
+    display: block;
+    height: 100%;
+    background: vars.$color-positive;
+  }
+
+  &__form-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: vars.$spacing-md;
+  }
+
+  &__form-card {
+    display: flex;
+    flex-direction: column;
+    gap: vars.$spacing-sm;
+    padding: vars.$spacing-md;
+    background: vars.$color-surface;
+    border: 1px solid vars.$color-border;
+    border-radius: vars.$border-radius;
+  }
+
+  &__form-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: vars.$spacing-sm;
+  }
+
+  &__form-streak {
+    padding: 2px vars.$spacing-sm;
+    border-radius: vars.$border-radius;
+    background: vars.$color-primary-light;
+    color: vars.$color-primary;
+    font-size: vars.$font-size-sm;
+    white-space: nowrap;
+  }
+
+  &__form-dots {
+    display: flex;
+    flex-wrap: wrap;
+    gap: vars.$spacing-xs;
+  }
+
+  &__form-dot {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    font-size: vars.$font-size-sm;
+    font-weight: 600;
+    color: #fff;
+
+    &--w {
+      background: vars.$color-positive;
+    }
+
+    &--d {
+      background: vars.$color-neutral;
+    }
+
+    &--l {
+      background: vars.$color-negative;
+    }
+  }
+
+  &__form-stats {
+    margin: 0;
+    font-size: vars.$font-size-sm;
+    color: vars.$color-text-secondary;
+  }
+
+  &__sub-title {
+    margin: 0 0 vars.$spacing-sm;
+    font-size: vars.$font-size-md;
+  }
+
+  &__insight-cols {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: vars.$spacing-md;
+  }
+
+  &__insight-col {
+    display: flex;
+    flex-direction: column;
+    gap: vars.$spacing-sm;
+  }
+
+  &__prob {
+    display: flex;
+    height: 30px;
+    border-radius: vars.$border-radius;
+    overflow: hidden;
+    font-size: vars.$font-size-sm;
+    color: #fff;
+  }
+
+  &__prob-seg {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    white-space: nowrap;
+    overflow: hidden;
+
+    &--home {
+      background: vars.$color-positive;
+    }
+
+    &--draw {
+      background: vars.$color-neutral;
+    }
+
+    &--away {
+      background: #1e64be;
+    }
+  }
+
+  &__score-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+
+    li {
+      display: flex;
+      align-items: center;
+      gap: vars.$spacing-sm;
+      padding: vars.$spacing-xs 0;
+    }
+  }
+
+  &__score-label {
+    min-width: 44px;
+    font-weight: 600;
+    text-align: center;
+  }
+
+  &__score-bar {
+    flex: 1;
+    height: 6px;
+    background: vars.$color-border;
+    border-radius: 3px;
+    overflow: hidden;
+
+    span {
+      display: block;
+      height: 100%;
+      background: vars.$color-primary;
+    }
+  }
+
+  &__score-prob {
+    min-width: 40px;
+    font-size: vars.$font-size-sm;
+    color: vars.$color-text-secondary;
+    text-align: right;
+  }
+
+  &__h2h-summary {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: vars.$spacing-sm;
+  }
+
+  &__h2h-badge {
+    padding: vars.$spacing-xs vars.$spacing-md;
+    border-radius: 999px;
+    font-size: vars.$font-size-sm;
+    font-weight: 600;
+
+    &--home {
+      background: rgba(214, 69, 65, 0.12);
+      color: vars.$color-positive;
+    }
+
+    &--draw {
+      background: vars.$color-surface-hover;
+      color: vars.$color-text-secondary;
+    }
+
+    &--away {
+      background: rgba(30, 100, 190, 0.12);
+      color: #1e64be;
     }
   }
 

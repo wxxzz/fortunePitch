@@ -8,7 +8,7 @@
 - llm.py      大模型日志模块(fp_llm_)
 """
 
-from app.models.analytics import PlayerMatchPerformance, TeamMatchStat
+from app.models.analytics import PlayerMatchPerformance, TeamMatchStat, TeamRating
 from app.models.llm import LlmRequestLog
 from app.models.base import (
     League,
@@ -63,6 +63,7 @@ __all__ = [
     "LlmRequestLog",
     "TeamMatchStat",
     "PlayerMatchPerformance",
+    "TeamRating",
     "OddsHistory",
     "Recommendation",
     "UserDecision",

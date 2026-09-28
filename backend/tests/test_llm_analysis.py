@@ -625,3 +625,48 @@ class TestLlmAnalysisEndpoint:
             # 调用成功但输出无法解析:响应原文保留,便于排障
             assert log.response_content == "抱歉,我无法完成该分析。"
             assert log.error_message is not None
+
+
+# ---------- 高阶数据上下文联动 ----------
+
+
+class TestInsightsContextIntegration:
+    """build_match_analysis_context 与 insights 服务的联动测试。"""
+
+    async def test_context_includes_insights_summary(
+        self, env: tuple[AsyncClient, async_sessionmaker]
+    ) -> None:
+        """上下文聚合携带高阶数据摘要,提示词含【高阶数据】段。"""
+        _, session_factory = env
+        match_id = await _seed_match(session_factory)
+
+        async with session_factory() as session:
+            context = await llm.build_match_analysis_context(session, match_id)
+        assert context.insights_text is not None
+        assert "近况" in context.insights_text
+        assert "Elo" in context.insights_text
+        assert "模型预测" in context.insights_text
+
+        user_text = llm.build_analysis_messages(context)[1]["content"]
+        assert "【高阶数据(系统模型派生,非外部数据)】" in user_text
+        assert context.insights_text in user_text
+
+    async def test_insights_failure_degrades_gracefully(
+        self,
+        env: tuple[AsyncClient, async_sessionmaker],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """insights 聚合抛错只降级:上下文仍构建,提示词标注暂不可用。"""
+        _, session_factory = env
+        match_id = await _seed_match(session_factory)
+
+        async def failing_insights(session: object, match_id: str, **_kwargs: object) -> object:
+            raise RuntimeError("insights 聚合故障")
+
+        monkeypatch.setattr(llm.insights, "get_match_insights", failing_insights)
+        async with session_factory() as session:
+            context = await llm.build_match_analysis_context(session, match_id)
+        assert context.insights_text is None
+
+        user_text = llm.build_analysis_messages(context)[1]["content"]
+        assert "高阶数据暂不可用(该维度参考缺失)" in user_text

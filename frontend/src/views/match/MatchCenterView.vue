@@ -21,7 +21,7 @@ import BetConfirmModal from '@/components/match/BetConfirmModal.vue'
 
 const router = useRouter()
 const matchStore = useMatchStore()
-const { games, isLoading, error, startBusinessDate, endBusinessDate } = storeToRefs(matchStore)
+const { games, isLoading, error, businessDate } = storeToRefs(matchStore)
 
 const baseStore = useBaseStore()
 const { leagues, teams } = storeToRefs(baseStore)
@@ -37,8 +37,8 @@ const selectedLeagueId = ref<number | null>(null)
 // 使用 store 中已经定义好的售卖日范围，后端已经按售卖日过滤，前端不需要再重复过滤日期
 const isTopFiveOnly = ref(false)
 
-// 售卖日范围变化时重新拉取数据
-watch([startBusinessDate, endBusinessDate], () => {
+// 售卖日变化时重新拉取数据
+watch(businessDate, () => {
   void matchStore.fetchGames()
 })
 
@@ -208,11 +208,7 @@ function handleConfirmSuccess(betCount: number): void {
         </label>
         <label class="match-center__filter">
           <span>日期</span>
-          <div class="match-center__date-range">
-            <input v-model="startBusinessDate" type="date" />
-            <span class="match-center__date-sep">至</span>
-            <input v-model="endBusinessDate" type="date" />
-          </div>
+          <input v-model="businessDate" type="date" />
         </label>
         <label class="match-center__filter match-center__filter--check">
           <input v-model="isTopFiveOnly" type="checkbox" />
@@ -366,12 +362,6 @@ function handleConfirmSuccess(betCount: number): void {
     }
   }
 
-  &__date-range {
-    display: flex;
-    align-items: center;
-    gap: vars.$spacing-xs;
-  }
-
   &__batch {
     display: flex;
     align-items: center;
@@ -382,11 +372,6 @@ function handleConfirmSuccess(betCount: number): void {
     border: 1px solid vars.$color-border;
     border-radius: vars.$border-radius;
     flex-wrap: wrap;
-  }
-
-  &__date-sep {
-    font-size: vars.$font-size-sm;
-    color: vars.$color-text-secondary;
   }
 
   &__batch-btn {

@@ -3,8 +3,10 @@
 存储算法引擎计算得出的深度量化数据。
 """
 
-from sqlalchemy import ForeignKey, Integer, Numeric
-from sqlalchemy.orm import Mapped, mapped_column
+import datetime
+
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, Numeric
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base, BigIntPK
 
@@ -36,6 +38,35 @@ class TeamMatchStat(Base):
     shot_accuracy: Mapped[float | None] = mapped_column(Numeric(5, 2), nullable=True)
     # 防守压迫指数(Passes Per Defensive Action,越低压迫越强)
     ppda: Mapped[float | None] = mapped_column(Numeric(5, 2), nullable=True)
+
+
+class TeamRating(Base):
+    """球队 Elo 评分表(fp_analytics_team_ratings):每队一行当前评分。
+
+    由 services/team_rating.recompute_team_ratings 按时间序回放全部
+    已完赛看板比赛(fp_base_team_matches)幂等重算(全量重建),
+    不保留评分历史——历史可随时由原始赛果重建。
+    """
+
+    __tablename__ = "fp_analytics_team_ratings"
+
+    team_id: Mapped[int] = mapped_column(
+        ForeignKey("fp_base_teams.team_id", ondelete="CASCADE"), primary_key=True
+    )
+    # 当前 Elo 评分(默认起点 1500,见 services/elo.py)
+    rating: Mapped[float] = mapped_column(Float, nullable=False, default=1500.0)
+    # 参与评分的比赛场数(用于前端展示数据充分性)
+    matches_played: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # 最近一场参与评分比赛的开赛时间(评分时新度)
+    last_match_time: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    update_time: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=datetime.datetime.now
+    )
+
+    # 单向关系,避免改动 base.py 的 Team 映射
+    team: Mapped["Team"] = relationship()
 
 
 class PlayerMatchPerformance(Base):
