@@ -7,3 +7,4 @@
 - [赛事高阶数据功能](match-insights-feature.md) - 派生计算管线(近况/H2H视角反转/Dixon-Coles强度/泊松/Elo回放)、GET /match/games/{id}/insights、POST /analytics/team-ratings/recompute、详情页两Tab、AI上下文【高阶数据】段
 - [球队档案页重构](team-profile-refactor.md) - /teams 全真实数据化(积分榜/看板/Elo三源并行加载缺失降级)、GET /analytics/team-ratings/{id}、删除演示雷达图、TeamTimeline xgDiff可选
 - [球队AI维度分析](team-llm-analysis-feature.md) - 镜像llm_fundamental五段式(六维strong/average/weak)、新表fp_llm_team_analyses+dims、日志match_id="team:{id}"、POST/GET /base/teams/{id}/llm-analysis
+- [联赛批量看板同步](league-dashboard-batch-sync.md) - /base 球队列表「批量同步看板」、本地已入库球队逐队sync_team_dashboard单队失败跳过、POST /collector/team-dashboard/sync-league、前端600s超时

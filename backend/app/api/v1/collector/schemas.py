@@ -176,3 +176,32 @@ class TeamDashboardSyncResultRead(BaseModel):
     updated_count: int = Field(description="更新看板比赛数")
     pruned_count: int = Field(description="修剪的失效未开赛行数")
     source: str = Field(description="数据来源标识", default="sporttery")
+
+
+class TeamDashboardLeagueSyncRequest(BaseModel):
+    """批量同步请求体:按联赛的本地球队名单同步全部球队看板。"""
+
+    league_id: int = Field(description="本地联赛 ID", examples=[1])
+    term_limits: int = Field(
+        default=20,
+        ge=1,
+        le=100,
+        description="每队赛程赛果拉取的近期完赛条数上限",
+    )
+
+
+class TeamDashboardLeagueSyncResultRead(BaseModel):
+    """联赛内全部球队看板批量同步结果。"""
+
+    league: LeagueRead = Field(description="同步的本地联赛")
+    team_count: int = Field(description="该联赛本地已入库球队总数")
+    synced_count: int = Field(description="成功同步的球队数")
+    future_count: int = Field(description="各队未来赛事条数合计")
+    result_count: int = Field(description="各队赛程赛果条数合计")
+    created_count: int = Field(description="新建看板比赛数合计")
+    updated_count: int = Field(description="更新看板比赛数合计")
+    pruned_count: int = Field(description="修剪的失效未开赛行数合计")
+    skipped_teams: list[str] = Field(
+        description="跳过的球队说明(队名 + 原因),如档案映射缺失或接口失败"
+    )
+    source: str = Field(description="数据来源标识", default="sporttery")

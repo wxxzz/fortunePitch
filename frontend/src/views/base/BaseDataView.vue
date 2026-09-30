@@ -13,6 +13,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { listTeams, type Team } from '@/api/base/team'
 import { listPlayers, type Player } from '@/api/base/player'
+import { syncLeagueTeamDashboards } from '@/api/collector/teamDashboard'
 import { useBaseStore } from '@/stores/base'
 
 const route = useRoute()
@@ -153,6 +154,43 @@ function handleDeleteLeague(id: number): void {
   void baseStore.removeLeague(id).then(() => {
     if (leagueId.value === id) navigateTo(null, null)
   })
+}
+
+// ---------- 批量同步看板(按联赛的本地球队名单) ----------
+
+const isSyncingDashboards = ref(false)
+/** 本次同步所属的联赛:状态与结果只在该联赛的球队视图下显示 */
+const syncTargetLeagueId = ref<number | null>(null)
+const dashboardSyncMessage = ref<string | null>(null)
+const dashboardSyncSkipped = ref<string[]>([])
+const dashboardSyncError = ref<string | null>(null)
+
+/** 同步状态/结果是否属于当前正在浏览的联赛 */
+const dashboardSyncVisible = computed(
+  () => syncTargetLeagueId.value !== null && syncTargetLeagueId.value === leagueId.value,
+)
+
+/** 按当前联赛的球队名单逐队同步看板;单队失败计入跳过列表,不阻断整批 */
+async function handleSyncLeagueDashboards(): Promise<void> {
+  const targetLeagueId = leagueId.value
+  if (targetLeagueId === null || isSyncingDashboards.value) return
+  isSyncingDashboards.value = true
+  syncTargetLeagueId.value = targetLeagueId
+  dashboardSyncMessage.value = null
+  dashboardSyncSkipped.value = []
+  dashboardSyncError.value = null
+  try {
+    const result = await syncLeagueTeamDashboards({ league_id: targetLeagueId })
+    dashboardSyncMessage.value =
+      `同步完成:球队 ${result.synced_count}/${result.team_count},` +
+      `未来赛事 ${result.future_count} 场,赛程赛果 ${result.result_count} 场` +
+      `(新增 ${result.created_count} / 更新 ${result.updated_count})`
+    dashboardSyncSkipped.value = result.skipped_teams
+  } catch (err) {
+    dashboardSyncError.value = err instanceof Error ? err.message : '批量同步失败'
+  } finally {
+    isSyncingDashboards.value = false
+  }
 }
 </script>
 
@@ -340,9 +378,46 @@ function handleDeleteLeague(id: number): void {
 
         <!-- 球队视图 -->
         <template v-else-if="viewLevel === 'teams'">
-          <h3 class="base-data__section-title">
-            {{ currentLeague?.league_name }} · 球队
-          </h3>
+          <div class="base-data__section-head">
+            <h3 class="base-data__section-title">
+              {{ currentLeague?.league_name }} · 球队
+            </h3>
+            <button
+              v-if="currentTeams.length > 0"
+              class="base-data__btn base-data__btn--sync"
+              type="button"
+              :disabled="isSyncingDashboards"
+              @click="handleSyncLeagueDashboards"
+            >
+              {{ isSyncingDashboards ? '批量同步中…' : '批量同步看板' }}
+            </button>
+          </div>
+          <p v-if="isSyncingDashboards && dashboardSyncVisible" class="base-data__hint">
+            正在按球队顺序同步,耗时较长,请勿关闭页面…
+          </p>
+          <p
+            v-if="dashboardSyncError && dashboardSyncVisible"
+            class="base-data__error"
+            role="alert"
+          >
+            {{ dashboardSyncError }}
+          </p>
+          <p
+            v-if="dashboardSyncMessage && dashboardSyncVisible"
+            class="base-data__hint"
+            role="status"
+          >
+            {{ dashboardSyncMessage }}
+          </p>
+          <ul
+            v-if="dashboardSyncSkipped.length > 0 && dashboardSyncVisible"
+            class="base-data__sync-skips"
+            role="status"
+          >
+            <li v-for="item in dashboardSyncSkipped" :key="item">
+              ⚠ 跳过:{{ item }}
+            </li>
+          </ul>
           <p v-if="isLoadingChildren" class="base-data__hint">正在加载球队…</p>
           <table v-else class="base-data__table">
             <thead>
@@ -600,6 +675,31 @@ function handleDeleteLeague(id: number): void {
     gap: vars.$spacing-sm;
   }
 
+  &__section-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: vars.$spacing-md;
+    flex-wrap: wrap;
+
+    .base-data__section-title {
+      margin-bottom: 0;
+    }
+  }
+
+  &__sync-skips {
+    margin: 0 0 vars.$spacing-sm;
+    padding: vars.$spacing-xs vars.$spacing-sm;
+    background: vars.$color-primary-light;
+    border-radius: vars.$border-radius;
+    color: vars.$color-primary;
+    font-size: vars.$font-size-sm;
+
+    li {
+      list-style: none;
+    }
+  }
+
   &__table {
     width: 100%;
     border-collapse: collapse;
@@ -641,6 +741,18 @@ function handleDeleteLeague(id: number): void {
     &--team {
       border: 1px solid vars.$color-primary;
       color: vars.$color-primary;
+    }
+
+    &--sync {
+      border: 1px solid vars.$color-primary;
+      background: vars.$color-primary;
+      color: #fff;
+
+      &:disabled {
+        background: vars.$color-neutral;
+        border-color: vars.$color-neutral;
+        cursor: not-allowed;
+      }
     }
 
     &--danger {

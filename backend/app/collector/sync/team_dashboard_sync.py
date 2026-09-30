@@ -5,6 +5,9 @@
 upsert 并修剪已失效的未开赛行 -> 拉取参赛联赛 ID 后抓取近期赛果
 upsert(未开赛行补上比分与结果)。
 
+支持按联赛批量:取该联赛本地已入库的球队名单逐队同步,
+单队失败(档案映射缺失/外部接口错误)计入跳过列表,不阻断整批。
+
 数据来源:https://www.sporttery.cn/zqlszl/qdzl/ (tid=竞彩网统一球队 ID)。
 """
 
@@ -17,8 +20,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.collector.parsers import team_dashboard as dashboard_parser
 from app.collector.sources import sporttery
-from app.core.exceptions import DataValidationError, ResourceNotFoundError
-from app.models import Team, TeamMatch, TeamProfile
+from app.core.exceptions import (
+    DataValidationError,
+    ExternalSourceError,
+    ResourceNotFoundError,
+)
+from app.models import League, Team, TeamMatch, TeamProfile
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +44,20 @@ class TeamDashboardSyncResult(typing.NamedTuple):
     created_count: int
     updated_count: int
     pruned_count: int
+
+
+class TeamDashboardLeagueSyncResult(typing.NamedTuple):
+    """一次联赛内全部球队看板批量同步的结果。"""
+
+    league: League
+    team_count: int
+    synced_count: int
+    future_count: int
+    result_count: int
+    created_count: int
+    updated_count: int
+    pruned_count: int
+    skipped_teams: list[str]
 
 
 def build_profile_fields(
@@ -166,6 +187,9 @@ async def _upsert_match(
     match = await session.get(TeamMatch, (team_id, fields["uniform_match_id"]))
     if match is None:
         session.add(TeamMatch(team_id=team_id, **fields))
+        # 生产会话 autoflush=False:立即落盘,同一场比赛先后出现在
+        # 未来赛事与赛果列表时,后续 session.get 才能查到本行,避免重复插入
+        await session.flush()
         return True
     for key, value in fields.items():
         # 赛果接口不提供轮次/阶段,更新时保留未来赛事带来的旧值
@@ -243,8 +267,11 @@ async def sync_team_dashboard(
             updated_count += 1
 
     # 修剪:删除本次未抓到的未开赛行(赛程改期/推迟产生的脏数据)。
-    # 在赛果 upsert 之后执行,刚完赛的行已有比分,不会被误删;
+    # 必须先把本轮 upsert 的比分落盘(生产会话 autoflush=False,脏数据
+    # 不会自动同步),否则 IS NULL 条件会误删刚完赛的原未来赛事行,
+    # 最终 flush 的 UPDATE 匹配不到行而抛 StaleDataError;
     # 未来赛事为空时同样修剪(本期无未来赛程 => 库存未开赛行均为脏数据)
+    await session.flush()
     pruned = await session.execute(
         delete(TeamMatch).where(
             TeamMatch.team_id == team.team_id,
@@ -264,4 +291,83 @@ async def sync_team_dashboard(
         created_count=created_count,
         updated_count=updated_count,
         pruned_count=pruned_count,
+    )
+
+
+async def sync_league_team_dashboards(
+    session: AsyncSession,
+    *,
+    league_id: int,
+    term_limits: int = 20,
+) -> TeamDashboardLeagueSyncResult:
+    """按联赛批量同步球队看板:取本地已入库球队名单逐队同步。
+
+    名单范围仅为 fp_base_teams 中该联赛下的球队(不重新拉取竞彩网
+    球队清单);每队在 SAVEPOINT 内同步,失败(档案映射缺失、球队
+    不存在、外部接口错误)时回滚该队半途写入并计入 skipped_teams
+    后继续,未捕获的数据库异常仍按整体失败处理。
+    顺序循环不并发,避免冲击竞彩网接口。
+
+    Args:
+        session: 异步数据库会话。
+        league_id: 本地联赛 ID。
+        term_limits: 每队赛程赛果拉取的近期完赛条数上限(1-100)。
+
+    Returns:
+        批量同步结果,含各队聚合计数与跳过说明。
+
+    Raises:
+        ResourceNotFoundError: 联赛不存在。
+    """
+    league = await session.get(League, league_id)
+    if league is None:
+        raise ResourceNotFoundError(League.__tablename__, str(league_id))
+    teams = list(
+        (
+            await session.execute(
+                select(Team).where(Team.league_id == league_id).order_by(Team.team_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    synced_count = 0
+    future_count = 0
+    result_count = 0
+    created_count = 0
+    updated_count = 0
+    pruned_count = 0
+    skipped_teams: list[str] = []
+    for team in teams:
+        try:
+            # 每队一个 SAVEPOINT:失败时回滚该队半途写入(如已 upsert 的
+            # 档案/未来赛事行),保证"跳过 = 该队未落库任何改动"
+            async with session.begin_nested():
+                result = await sync_team_dashboard(
+                    session, team_id=team.team_id, term_limits=term_limits
+                )
+        except (DataValidationError, ResourceNotFoundError, ExternalSourceError) as exc:
+            logger.warning(
+                "联赛 %s 批量同步:球队 %s(id=%s)跳过 - %s",
+                league.league_name, team.team_name, team.team_id, exc.message,
+            )
+            skipped_teams.append(f"{team.team_name}({exc.message})")
+            continue
+        synced_count += 1
+        future_count += result.future_count
+        result_count += result.result_count
+        created_count += result.created_count
+        updated_count += result.updated_count
+        pruned_count += result.pruned_count
+    return TeamDashboardLeagueSyncResult(
+        league=league,
+        team_count=len(teams),
+        synced_count=synced_count,
+        future_count=future_count,
+        result_count=result_count,
+        created_count=created_count,
+        updated_count=updated_count,
+        pruned_count=pruned_count,
+        skipped_teams=skipped_teams,
     )

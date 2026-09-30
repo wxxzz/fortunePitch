@@ -16,6 +16,7 @@ from app.collector.parsers import team_dashboard as dashboard_parser
 from app.collector.sync import team_dashboard_sync, team_sync
 from app.collector.sources import sporttery
 from app.core.config import get_settings
+from app.core.exceptions import ExternalSourceError, ResourceNotFoundError
 from app.core.database import Base, get_db_session
 from app.main import app
 from app.models import League, Team, TeamMatch, TeamProfile
@@ -361,7 +362,9 @@ async def session_factory() -> typing.AsyncGenerator[async_sessionmaker, None]: 
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    yield async_sessionmaker(engine, expire_on_commit=False)
+    # autoflush=False 对齐生产 AsyncSessionLocal:服务的 flush 时机
+    # (如修剪 DELETE 前)必须显式落盘,不能依赖自动 flush
+    yield async_sessionmaker(engine, expire_on_commit=False, autoflush=False)
     await engine.dispose()
 
 
@@ -638,6 +641,228 @@ class TestTeamDashboardSync:
             assert by_uniform[514].abbrev_name == "皇家马德里"
 
 
+# ---------- 联赛批量同步 ----------
+
+
+def _restub_multi_team_sources(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    failing_uniform_ids: frozenset[int] = frozenset(),
+) -> None:
+    """把看板三接口重打为按 uniform_team_id 键控的多队数据源。
+
+    每队固定返回 1 条未来赛事 + 1 条赛程赛果;failing_uniform_ids
+    中的球队在拉取赛程赛果(最后一步外部请求,此时档案与未来赛事行
+    已写入)时抛外部源错误,用于验证 SAVEPOINT 回滚半途写入。
+    """
+
+    async def fetch_future(uniform_team_id: int) -> list[dict[str, typing.Any]]:
+        return [
+            {
+                "homeAbbCnName": "对手队",
+                "awayAbbCnName": "看板球队",
+                "matchDateTime": "2026-10-05 21:00",
+                "gameweek": "8",
+                "leagueAbbCnName": "西甲",
+                "uniformHomeTeamId": 900,
+                "uniformAwayTeamId": uniform_team_id,
+                "uniformLeagueId": 24,
+                "uniformMatchId": 50000 + uniform_team_id,
+            }
+        ]
+
+    async def fetch_league_list(uniform_team_id: int) -> list[dict[str, typing.Any]]:
+        return [{"leagueAbbCnName": "西甲", "uniformLeagueId": 24}]
+
+    async def fetch_results(
+        uniform_team_id: int,
+        uniform_league_ids: list[int] | None = None,
+        home_away_flag: str | None = None,
+        term_limits: int = 20,
+    ) -> dict[str, typing.Any]:
+        assert uniform_league_ids == [24]
+        if uniform_team_id in failing_uniform_ids:
+            raise ExternalSourceError(f"竞彩网接口失败: tid={uniform_team_id}")
+        return {
+            "matchList": [
+                {
+                    "homeAbbCnName": "对手队",
+                    "awayAbbCnName": "看板球队",
+                    "matchDate": "2026-09-20",
+                    "sectionsNo1": "0:1",
+                    "sectionsNo999": "1:2",
+                    "leagueAbbCnName": "西甲",
+                    "uniformHomeTeamId": 900,
+                    "uniformAwayTeamId": uniform_team_id,
+                    "uniformLeagueId": 24,
+                    "uniformMatchId": 40000 + uniform_team_id,
+                }
+            ]
+        }
+
+    monkeypatch.setattr(sporttery, "fetch_team_future_matches", fetch_future)
+    monkeypatch.setattr(sporttery, "fetch_team_league_list", fetch_league_list)
+    monkeypatch.setattr(sporttery, "fetch_team_match_results", fetch_results)
+
+
+@pytest.fixture
+async def la_liga(
+    session_factory: async_sessionmaker,
+) -> tuple[int, dict[str, int]]:
+    """同步西甲球队清单,返回 (league_id, {球队名: team_id})。"""
+    async with session_factory() as session:
+        result = await team_sync.sync_league_teams(session, "西甲")
+        await session.commit()
+    return result.league.league_id, {t.team_name: t.team_id for t in result.teams}
+
+
+class TestLeagueDashboardSync:
+    """按联赛批量同步球队看板测试。"""
+
+    async def test_syncs_all_teams_and_aggregates_counts(
+        self,
+        session_factory: async_sessionmaker,
+        la_liga: tuple[int, dict[str, int]],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        league_id, team_ids_by_name = la_liga
+        _restub_multi_team_sources(monkeypatch)
+
+        async with session_factory() as session:
+            result = await team_dashboard_sync.sync_league_team_dashboards(
+                session, league_id=league_id
+            )
+            await session.commit()
+
+        assert result.league.league_id == league_id
+        assert result.team_count == 3
+        assert result.synced_count == 3
+        assert result.skipped_teams == []
+        # 每队 1 条未来赛事 + 1 条赛程赛果
+        assert result.future_count == 3
+        assert result.result_count == 3
+        assert result.created_count == 6
+        assert result.updated_count == 0
+        assert result.pruned_count == 0
+
+        async with session_factory() as session:
+            for team_id in team_ids_by_name.values():
+                rows = (
+                    await session.scalars(
+                        select(TeamMatch).where(TeamMatch.team_id == team_id)
+                    )
+                ).all()
+                assert len(rows) == 2
+
+    async def test_second_run_updates_without_creating(
+        self,
+        session_factory: async_sessionmaker,
+        la_liga: tuple[int, dict[str, int]],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        league_id, _ = la_liga
+        _restub_multi_team_sources(monkeypatch)
+
+        async with session_factory() as session:
+            await team_dashboard_sync.sync_league_team_dashboards(
+                session, league_id=league_id
+            )
+            await session.commit()
+        async with session_factory() as session:
+            second = await team_dashboard_sync.sync_league_team_dashboards(
+                session, league_id=league_id
+            )
+            await session.commit()
+
+        assert second.team_count == 3
+        assert second.synced_count == 3
+        assert second.created_count == 0
+        assert second.updated_count == 6
+
+    async def test_skips_team_without_profile(
+        self,
+        session_factory: async_sessionmaker,
+        la_liga: tuple[int, dict[str, int]],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        league_id, _ = la_liga
+        _restub_multi_team_sources(monkeypatch)
+
+        async with session_factory() as session:
+            session.add(Team(team_name="赫塔费", league_id=league_id))
+            await session.flush()
+            result = await team_dashboard_sync.sync_league_team_dashboards(
+                session, league_id=league_id
+            )
+            await session.commit()
+
+        assert result.team_count == 4
+        assert result.synced_count == 3
+        assert len(result.skipped_teams) == 1
+        assert result.skipped_teams[0].startswith("赫塔费(")
+        assert "尚未同步竞彩网档案" in result.skipped_teams[0]
+
+    async def test_skips_team_on_external_error(
+        self,
+        session_factory: async_sessionmaker,
+        la_liga: tuple[int, dict[str, int]],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        league_id, _ = la_liga
+        _restub_multi_team_sources(monkeypatch, failing_uniform_ids=frozenset({514}))
+
+        async with session_factory() as session:
+            result = await team_dashboard_sync.sync_league_team_dashboards(
+                session, league_id=league_id
+            )
+            await session.commit()
+
+        # 皇马(514)在拉取赛果时接口失败被跳过,其余两队正常同步
+        assert result.team_count == 3
+        assert result.synced_count == 2
+        assert len(result.skipped_teams) == 1
+        assert result.skipped_teams[0].startswith("皇家马德里(")
+        assert result.created_count == 4
+
+        # 跳过 = 未落库:皇马的看板比赛行为空(失败发生在其未来赛事行
+        # 已写入之后,由 SAVEPOINT 回滚)
+        async with session_factory() as session:
+            real_madrid = await session.scalar(
+                select(Team).where(Team.team_name == "皇家马德里")
+            )
+            real_matches = (
+                await session.scalars(
+                    select(TeamMatch).where(TeamMatch.team_id == real_madrid.team_id)
+                )
+            ).all()
+            assert real_matches == []
+
+    async def test_unknown_league_raises_404(
+        self, session_factory: async_sessionmaker
+    ) -> None:
+        async with session_factory() as session:
+            with pytest.raises(ResourceNotFoundError):
+                await team_dashboard_sync.sync_league_team_dashboards(
+                    session, league_id=99999
+                )
+
+    async def test_empty_league_returns_zero_counts(
+        self, session_factory: async_sessionmaker
+    ) -> None:
+        async with session_factory() as session:
+            league = League(league_name="英超", country="英格兰")
+            session.add(league)
+            await session.flush()
+            result = await team_dashboard_sync.sync_league_team_dashboards(
+                session, league_id=league.league_id
+            )
+
+        assert result.team_count == 0
+        assert result.synced_count == 0
+        assert result.skipped_teams == []
+        assert result.created_count == 0
+
+
 # ---------- 接口层 ----------
 
 
@@ -726,6 +951,59 @@ class TestSyncApi:
         response = await client.post(
             "/api/v1/collector/team-dashboard/sync",
             json={"uniform_team_id": UNIFORM_TEAM_ID},
+            headers={"X-API-Key": "wrong"},
+        )
+        assert response.status_code == 401
+
+
+class TestLeagueSyncApi:
+    """/api/v1/collector/team-dashboard/sync-league 接口测试。"""
+
+    async def test_sync_league_success(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _restub_multi_team_sources(monkeypatch)
+        teams = (
+            await client.get("/api/v1/base/teams", params={"limit": 100})
+        ).json()
+        league_id = teams[0]["league_id"]
+
+        response = await client.post(
+            "/api/v1/collector/team-dashboard/sync-league",
+            json={"league_id": league_id},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["league"]["league_id"] == league_id
+        assert body["team_count"] == 3
+        assert body["synced_count"] == 3
+        assert body["future_count"] == 3
+        assert body["result_count"] == 3
+        assert body["created_count"] == 6
+        assert body["skipped_teams"] == []
+        assert body["source"] == "sporttery"
+
+        # 幂等:同参数再同步不新建,仅更新
+        second = (
+            await client.post(
+                "/api/v1/collector/team-dashboard/sync-league",
+                json={"league_id": league_id},
+            )
+        ).json()
+        assert second["created_count"] == 0
+        assert second["updated_count"] == 6
+
+    async def test_sync_league_unknown_league_404(self, client: AsyncClient) -> None:
+        response = await client.post(
+            "/api/v1/collector/team-dashboard/sync-league",
+            json={"league_id": 99999},
+        )
+        assert response.status_code == 404
+
+    async def test_sync_league_requires_api_key(self, client: AsyncClient) -> None:
+        response = await client.post(
+            "/api/v1/collector/team-dashboard/sync-league",
+            json={"league_id": 1},
             headers={"X-API-Key": "wrong"},
         )
         assert response.status_code == 401

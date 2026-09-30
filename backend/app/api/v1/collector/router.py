@@ -12,6 +12,8 @@ from app.api.v1.collector.schemas import (
     PlayerSyncResultRead,
     ResultSyncRequest,
     ResultSyncResultRead,
+    TeamDashboardLeagueSyncRequest,
+    TeamDashboardLeagueSyncResultRead,
     TeamDashboardSyncRequest,
     TeamDashboardSyncResultRead,
     TeamFundamentalsSyncResultRead,
@@ -195,6 +197,42 @@ async def sync_team_dashboard(
         created_count=result.created_count,
         updated_count=result.updated_count,
         pruned_count=result.pruned_count,
+    )
+
+
+@router.post(
+    "/team-dashboard/sync-league",
+    response_model=TeamDashboardLeagueSyncResultRead,
+    status_code=status.HTTP_200_OK,
+    summary="按联赛批量同步球队看板数据",
+)
+async def sync_league_team_dashboards(
+    payload: TeamDashboardLeagueSyncRequest,
+    session: AsyncSession = Depends(get_db_session),
+) -> TeamDashboardLeagueSyncResultRead:
+    """按联赛的本地球队名单批量同步全部球队看板(未来赛事 + 赛程赛果)。
+
+    名单范围仅为 fp_base_teams 中该联赛下已入库的球队,不重新拉取竞彩网
+    球队清单;未同步过竞彩网档案映射(或单队接口失败)的球队计入
+    skipped_teams 跳过,不阻断其余球队。顺序同步,球队较多时耗时较长;
+    重复同步幂等更新并修剪失效未开赛行。
+
+    Raises:
+        ResourceNotFoundError: 联赛不存在。
+    """
+    result = await team_dashboard_sync.sync_league_team_dashboards(
+        session, league_id=payload.league_id, term_limits=payload.term_limits
+    )
+    return TeamDashboardLeagueSyncResultRead(
+        league=LeagueRead.model_validate(result.league),
+        team_count=result.team_count,
+        synced_count=result.synced_count,
+        future_count=result.future_count,
+        result_count=result.result_count,
+        created_count=result.created_count,
+        updated_count=result.updated_count,
+        pruned_count=result.pruned_count,
+        skipped_teams=result.skipped_teams,
     )
 
 
