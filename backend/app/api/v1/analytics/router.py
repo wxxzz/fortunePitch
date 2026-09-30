@@ -11,13 +11,14 @@ from app.api.v1.analytics.schemas import (
     PoissonPredictResponse,
     MatchProbabilities,
     ScoreProbability,
+    TeamRatingRead,
     TeamRatingRecomputeRead,
     TeamStatCreate,
     TeamStatRead,
 )
 from app.core.database import get_db_session
 from app.core.security import verify_api_key
-from app.models import MatchGame, PlayerMatchPerformance, TeamMatchStat
+from app.models import MatchGame, PlayerMatchPerformance, TeamMatchStat, TeamRating
 from app.services import crud, team_rating
 from app.services.poisson import predict_score_grid
 
@@ -84,6 +85,18 @@ async def recompute_team_ratings(
         teams_rated=result.teams_rated,
         matches_skipped=result.matches_skipped,
     )
+
+
+@router.get(
+    "/team-ratings/{team_id}",
+    response_model=TeamRatingRead,
+    summary="查询单支球队当前 Elo 评分",
+)
+async def get_team_rating(
+    team_id: int, session: AsyncSession = Depends(get_db_session)
+) -> TeamRating:
+    """返回该队当前 Elo 评分(未重算过时返回 404)。"""
+    return await crud.get_entity(session, TeamRating, team_id)
 
 
 # ---------- 球员表现 /player-stats ----------

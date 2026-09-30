@@ -15,14 +15,16 @@ from app.api.v1.base.schemas import (
     TeamCreate,
     TeamDashboardRead,
     TeamFundamentalsRead,
+    TeamLlmAnalysisRead,
     TeamMatchRead,
     TeamProfileRead,
     TeamRead,
 )
 from app.core.database import get_db_session
+from app.core.exceptions import ResourceNotFoundError
 from app.core.security import verify_api_key
-from app.models import League, Player, Team, TeamFundamentals
-from app.services import crud, team_dashboard
+from app.models import League, Player, Team, TeamFundamentals, TeamLlmAnalysis
+from app.services import crud, llm_team, team_dashboard
 
 router = APIRouter(prefix="/base", tags=["base"], dependencies=[Depends(verify_api_key)])
 
@@ -160,6 +162,67 @@ async def get_team_dashboard(
             win_rate=data.statistics.win_rate,
         ),
     )
+
+
+# ---------- 大模型球队维度分析 /teams/{team_id}/llm-analysis ----------
+
+@router.post(
+    "/teams/{team_id}/llm-analysis",
+    response_model=TeamLlmAnalysisRead,
+    summary="大模型球队维度分析(生成后保存)",
+)
+async def analyze_team(
+    team_id: int, session: AsyncSession = Depends(get_db_session)
+) -> TeamLlmAnalysis:
+    """调用大模型对单支球队做多维度分析并落库:进攻能力 / 防守能力 /
+    主场表现 / 客场表现 / 近期状态 / 其他因素。
+
+    服务端聚合球队档案、积分榜战绩、看板赛程赛果与 Elo 评分后构造提示词
+    调用 OpenAI 兼容接口;调用过程写入请求日志表(fp_llm_request_logs,
+    match_id 存 "team:{team_id}" 标识),每次生成保存一条历史记录
+    (fp_llm_team_analyses + fp_llm_team_analysis_dims)。
+    结果为数据分析参考,不构成投注建议。
+
+    Raises:
+        ResourceNotFoundError: 球队不存在。
+        LlmNotConfiguredError: 未配置 LLM API Key(503)。
+        LlmServiceError: 大模型调用或输出解析失败(502)。
+    """
+    context = await llm_team.build_team_context(session, team_id)
+    analysis = await llm_team.analyze_team(context)
+    saved = await llm_team.save_team_analysis(session, analysis)
+    return TeamLlmAnalysisRead.model_validate(saved)
+
+
+@router.get(
+    "/teams/{team_id}/llm-analysis",
+    response_model=TeamLlmAnalysisRead,
+    summary="查询球队最近一次已保存的大模型维度分析",
+)
+async def get_latest_team_llm_analysis(
+    team_id: int, session: AsyncSession = Depends(get_db_session)
+) -> TeamLlmAnalysis:
+    """查询球队最近一次已保存的维度分析(含维度明细)。
+
+    Raises:
+        ResourceNotFoundError: 该球队尚未生成过维度分析。
+    """
+    analysis = await llm_team.get_latest_team_analysis(session, team_id)
+    if analysis is None:
+        raise ResourceNotFoundError("大模型球队分析结果", str(team_id))
+    return TeamLlmAnalysisRead.model_validate(analysis)
+
+
+@router.get(
+    "/teams/{team_id}/llm-analyses",
+    response_model=list[TeamLlmAnalysisRead],
+    summary="查询球队的大模型维度分析历史",
+)
+async def list_team_llm_analyses(
+    team_id: int, session: AsyncSession = Depends(get_db_session)
+) -> list[TeamLlmAnalysis]:
+    """查询球队的历史维度分析列表,按生成时间倒序,最多返回最近 20 条。"""
+    return await llm_team.list_team_analyses(session, team_id)
 
 
 # ---------- 球员 /players ----------

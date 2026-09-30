@@ -14,8 +14,8 @@ export interface TeamTimelineItem {
   goalsFor: number
   /** 对方进球 */
   goalsAgainst: number
-  /** xG 差值(我方 xG - 对方 xG) */
-  xgDiff: number
+  /** xG 差值(我方 xG - 对方 xG),无 xG 数据时省略 */
+  xgDiff?: number | null
   /** 比赛日期(显示用文本) */
   date: string
 }
@@ -55,6 +55,7 @@ const toneClass = computed(() =>
         <div class="team-timeline__meta">
           <span>{{ item.date }}</span>
           <span
+            v-if="item.xgDiff != null"
             class="team-timeline__xg"
             :class="item.xgDiff >= 0 ? 'team-timeline__xg--pos' : 'team-timeline__xg--neg'"
           >

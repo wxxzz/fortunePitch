@@ -6,7 +6,8 @@
 3. 幂等(连续两次重算结果完全一致);
 4. 单侧看板(仅一队有该场行)经 TeamProfile 解析对手后仍计入;
 5. 对手无 profile 映射 -> 该场跳过并计数;
-6. 接口:POST /analytics/team-ratings/recompute 返回摘要。
+6. 接口:POST /analytics/team-ratings/recompute 返回摘要;
+7. 接口:GET /analytics/team-ratings/{id} 重算前 404 / 重算后返回评分。
 
 注:评分均为模拟数据,测试不涉及真实资金。
 """
@@ -366,3 +367,48 @@ class TestRecomputeEndpoint:
         response_again = await client.post("/api/v1/analytics/team-ratings/recompute")
         assert response_again.status_code == 200
         assert response_again.json() == body
+
+
+class TestGetTeamRatingEndpoint:
+
+    async def test_get_rating_before_recompute_returns_404(
+        self, env: tuple[AsyncClient, async_sessionmaker]
+    ) -> None:
+        """未重算过 -> GET /analytics/team-ratings/{id} 返回 404。"""
+        client, session_factory = env
+        home_id, _away_id = await _seed_teams(session_factory)
+
+        response = await client.get(f"/api/v1/analytics/team-ratings/{home_id}")
+        assert response.status_code == 404
+
+    async def test_get_rating_after_recompute_returns_rating(
+        self, env: tuple[AsyncClient, async_sessionmaker]
+    ) -> None:
+        """重算后 -> GET 返回该队当前评分,与库中值一致。"""
+        client, session_factory = env
+        home_id, away_id = await _seed_teams(session_factory)
+        async with session_factory() as session:
+            session.add(
+                _dashboard_row(
+                    home_id, 701, is_home=True, home_team_name="阿森纳",
+                    away_team_name="切尔西", uniform_home=9001,
+                    uniform_away=9002, home_goals=2, away_goals=0,
+                    match_time=datetime.datetime(2026, 8, 1),
+                )
+            )
+            await session.commit()
+
+        recompute = await client.post("/api/v1/analytics/team-ratings/recompute")
+        assert recompute.status_code == 200
+
+        response = await client.get(f"/api/v1/analytics/team-ratings/{home_id}")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["team_id"] == home_id
+        assert body["matches_played"] == 1
+        # 主胜 2-0,两队同起点 -> 主队评分高于 1500
+        assert body["rating"] > 1500.0
+
+        away_response = await client.get(f"/api/v1/analytics/team-ratings/{away_id}")
+        assert away_response.status_code == 200
+        assert away_response.json()["rating"] < 1500.0

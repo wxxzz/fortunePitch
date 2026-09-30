@@ -193,3 +193,35 @@ class TeamDashboardRead(BaseModel):
     future_matches: list[TeamMatchRead] = Field(description="未来赛事(开赛时间升序)")
     match_results: list[TeamMatchRead] = Field(description="赛程赛果(比赛时间降序)")
     statistics: DashboardStatisticsRead = Field(description="近期战绩统计")
+
+
+# ---------- 大模型球队维度分析 ----------
+
+
+class TeamLlmAnalysisDimRead(BaseModel):
+    """大模型球队维度结论明细响应模型。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    dim_id: int
+    code: str = Field(description="维度编码:ATTACK/DEFENSE/HOME_FORM/AWAY_FORM/RECENT_FORM/OTHER")
+    title: str = Field(description="维度展示名,如 进攻能力")
+    rating: str = Field(description="评级:strong=强 / average=中 / weak=弱")
+    content: str = Field(description="维度分析结论")
+
+
+class TeamLlmAnalysisRead(BaseModel):
+    """大模型球队维度分析响应模型(整体研判 + 六维度结论 + 风险提示)。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    analysis_id: int
+    team_id: int
+    provider: str
+    model: str
+    summary: str = Field(description="整体研判")
+    risks: list[str] = Field(default_factory=list, description="风险提示")
+    dimensions: list[TeamLlmAnalysisDimRead] = Field(
+        default_factory=list, description="六维度结论明细"
+    )
+    created_at: datetime.datetime

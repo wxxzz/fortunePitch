@@ -9,7 +9,7 @@
 """
 
 from app.models.analytics import PlayerMatchPerformance, TeamMatchStat, TeamRating
-from app.models.llm import LlmRequestLog
+from app.models.llm import LlmRequestLog, TeamLlmAnalysis, TeamLlmAnalysisDim
 from app.models.base import (
     League,
     Player,
@@ -61,6 +61,8 @@ __all__ = [
     "MatchLlmTrendAnalysis",
     "MatchLlmTrendPlay",
     "LlmRequestLog",
+    "TeamLlmAnalysis",
+    "TeamLlmAnalysisDim",
     "TeamMatchStat",
     "PlayerMatchPerformance",
     "TeamRating",
