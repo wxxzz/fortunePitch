@@ -33,6 +33,9 @@ from app.models.match import (
     MatchStatus,
 )
 from app.models.strategy import (
+    AiParlayPlan,
+    AiPick,
+    AiPickBatch,
     BetScheme,
     BetSchemeItem,
     DecisionStatus,
@@ -72,4 +75,7 @@ __all__ = [
     "DecisionStatus",
     "BetScheme",
     "BetSchemeItem",
+    "AiPickBatch",
+    "AiPick",
+    "AiParlayPlan",
 ]

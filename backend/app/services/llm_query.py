@@ -29,16 +29,20 @@ RESULT_FIELD_BY_PLAY = {
 }
 
 
-def resolve_recommendation_odds(
+def resolve_recommendation_option(
     pools: list[dict[str, typing.Any]] | None,
     play_code: str,
     recommendation: str,
-) -> float | None:
-    """从当前在售赔率池中解析推荐选项的最新赔率。
+) -> dict[str, typing.Any] | None:
+    """从当前在售赔率池中解析推荐选项,返回匹配的完整选项。
 
-    先按选项展示名精确匹配;模型对让球玩法可能输出"让球主胜"这类
-    带前缀的说法,回退为"推荐文案包含选项名"的最长子串匹配。
-    未开售或赔率未同步时返回 None。
+    匹配顺序(逐级回退,全部失败返回 None):
+    1. 归一化精确匹配(处理让球"让球主胜"vs"主胜"、总进球
+       "3球"vs"3"这类文案差异,与命中比对口径一致);
+    2. 原始展示名精确匹配;
+    3. "推荐文案包含选项名"的最长子串匹配(避免"平"抢先命中
+       "让球平"这类文案);
+    4. 仅接受赔率可转 float 且 > 0 的选项。
 
     Args:
         pools: fp_match_odds.pools 归一化玩法列表(可为 None)。
@@ -46,7 +50,7 @@ def resolve_recommendation_odds(
         recommendation: 推荐选项展示名。
 
     Returns:
-        推荐选项的当前赔率;无法解析时为 None。
+        匹配的选项 dict(含 code/label/odds);无法解析时为 None。
     """
     if not pools:
         return None
@@ -54,16 +58,55 @@ def resolve_recommendation_odds(
     if pool is None:
         return None
     options = [o for o in pool.get("options") or [] if isinstance(o, dict)]
-    text = recommendation.strip()
+    text = str(recommendation or "").strip()
+    if not text:
+        return None
+    normalized_text = _normalize_play_label(play_code, text)
+
+    def _valid(option: dict[str, typing.Any]) -> bool:
+        try:
+            return float(option.get("odds")) > 0
+        except (TypeError, ValueError):
+            return False
+
+    candidates = [o for o in options if _valid(o)]
+    # 1. 归一化精确匹配
     matched = next(
-        (o for o in options if str(o.get("label") or "") == text), None
+        (
+            o
+            for o in candidates
+            if _normalize_play_label(play_code, str(o.get("label") or ""))
+            == normalized_text
+        ),
+        None,
     )
+    # 2. 原始展示名精确匹配
     if matched is None:
-        # 子串回退取最长匹配,避免"平"抢先命中"让球平"这类文案
-        candidates = [
-            o for o in options if str(o.get("label") or "") and str(o["label"]) in text
+        matched = next(
+            (o for o in candidates if str(o.get("label") or "") == text), None
+        )
+    # 3. 最长子串回退
+    if matched is None:
+        substring_hits = [
+            o
+            for o in candidates
+            if str(o.get("label") or "") and str(o["label"]) in text
         ]
-        matched = max(candidates, key=lambda o: len(str(o["label"])), default=None)
+        matched = max(substring_hits, key=lambda o: len(str(o["label"])), default=None)
+    return matched
+
+
+def resolve_recommendation_odds(
+    pools: list[dict[str, typing.Any]] | None,
+    play_code: str,
+    recommendation: str,
+) -> float | None:
+    """从当前在售赔率池中解析推荐选项的最新赔率。
+
+    resolve_recommendation_option 的薄包装,仅取匹配选项的赔率;
+    未开售或赔率未同步时返回 None。
+    """
+    matched = resolve_recommendation_option(pools, play_code, recommendation)
     if matched is None:
         return None
     try:

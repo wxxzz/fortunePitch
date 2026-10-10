@@ -1,8 +1,16 @@
 /**
- * 策略与赔率模块 Store:赔率历史 / 策略推荐 / 用户决策 / 凯利指数。
+ * 策略与赔率模块 Store:赔率历史 / 策略推荐 / AI 推荐 / 用户决策 / 凯利指数。
  */
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
+
+/** 本地时区当天日期串(YYYY-MM-DD),售卖日筛选缺省值 */
+function todayDateStr(): string {
+  const now = new Date()
+  const month = String(now.getMonth() + 1).padStart(2, '0')
+  const day = String(now.getDate()).padStart(2, '0')
+  return `${now.getFullYear()}-${month}-${day}`
+}
 import {
   listOddsHistory,
   type OddsHistory,
@@ -16,16 +24,42 @@ import {
   type UserDecision,
 } from '@/api/strategy/userDecision'
 import { calculateKelly, type KellyResponse } from '@/api/strategy/kelly'
+import {
+  generateAiRecommendations,
+  listAiPicks,
+  listAiParlayPlans,
+  type AiBatchSummary,
+  type AiPick,
+  type AiParlayPlan,
+} from '@/api/strategy/aiPick'
 
 export const useStrategyStore = defineStore('strategy', () => {
   const oddsHistory = ref<OddsHistory[]>([])
   const recommendations = ref<Recommendation[]>([])
   const decisions = ref<UserDecision[]>([])
   const kellyResult = ref<KellyResponse | null>(null)
+  // AI 策略推荐(单场清单 + 串关候选 + 批次摘要 + 售卖日筛选)
+  const aiPicks = ref<AiPick[]>([])
+  const aiPlans = ref<AiParlayPlan[]>([])
+  const aiBatch = ref<AiBatchSummary | null>(null)
+  /** 售卖日筛选('YYYY-MM-DD'),缺省为当天;清空 = 最近生效批次 */
+  const aiBusinessDate = ref<string>(todayDateStr())
+  const isGenerating = ref(false)
   const isLoading = ref(false)
   const error = ref<string | null>(null)
 
-  /** 拉取策略模块全部数据 */
+  /** 按当前售卖日筛选拉取 AI 推荐清单与串关候选 */
+  async function fetchAiRecommendations(): Promise<void> {
+    const params = { business_date: aiBusinessDate.value || undefined }
+    const [picks, plans] = await Promise.all([
+      listAiPicks({ ...params, limit: 100 }),
+      listAiParlayPlans(params),
+    ])
+    aiPicks.value = picks
+    aiPlans.value = plans
+  }
+
+  /** 拉取策略模块全部数据(含 AI 推荐,按当前售卖日筛选) */
   async function fetchAll(): Promise<void> {
     isLoading.value = true
     error.value = null
@@ -34,6 +68,7 @@ export const useStrategyStore = defineStore('strategy', () => {
         listOddsHistory({ limit: 100 }),
         listRecommendations({ limit: 50 }),
         listUserDecisions({ limit: 50 }),
+        fetchAiRecommendations(),
       ])
       oddsHistory.value = odds
       recommendations.value = recs
@@ -42,6 +77,25 @@ export const useStrategyStore = defineStore('strategy', () => {
       error.value = err instanceof Error ? err.message : '策略数据加载失败'
     } finally {
       isLoading.value = false
+    }
+  }
+
+  /** 生成/重算 AI 策略推荐(按钮手动触发,可反复重算) */
+  async function generateAi(minConfidence: number): Promise<boolean> {
+    isGenerating.value = true
+    error.value = null
+    try {
+      aiBatch.value = await generateAiRecommendations({
+        business_date: aiBusinessDate.value || undefined,
+        min_confidence: minConfidence,
+      })
+      await fetchAiRecommendations()
+      return true
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : 'AI 推荐生成失败'
+      return false
+    } finally {
+      isGenerating.value = false
     }
   }
 
@@ -60,9 +114,16 @@ export const useStrategyStore = defineStore('strategy', () => {
     recommendations,
     decisions,
     kellyResult,
+    aiPicks,
+    aiPlans,
+    aiBatch,
+    aiBusinessDate,
+    isGenerating,
     isLoading,
     error,
     fetchAll,
+    fetchAiRecommendations,
+    generateAi,
     fetchKelly,
   }
 })

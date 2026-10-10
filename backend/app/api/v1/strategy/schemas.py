@@ -6,9 +6,15 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.models import DecisionStatus
 
-# 允许的策略类型与玩法取值
-STRATEGY_TYPES = ("WIN_DRAW_LOSS", "HANDICAP", "SCORE")
-# 用户自选决策允许的玩法编码(与竞彩玩法对应,宽于 STRATEGY_TYPES)
+# 允许的策略类型与玩法取值(与 user_picks.POOL_TO_STRATEGY 写入口径一致)
+STRATEGY_TYPES = (
+    "WIN_DRAW_LOSS",
+    "HANDICAP",
+    "SCORE",
+    "TOTAL_GOALS",
+    "HALF_FULL",
+)
+# 用户自选决策允许的玩法编码(与竞彩玩法对应)
 USER_PICK_POOL_CODES = ("HAD", "HHAD", "CRS", "TTG", "HAFU")
 
 
@@ -350,3 +356,130 @@ class ReviewDecisionRead(BaseModel):
     result_label: str | None = Field(description="赛果标签,未开奖为 None")
     result_status: DecisionStatus
     profit_loss: float | None
+
+
+# ---------- AI 策略推荐 /ai-recommendations /ai-picks /ai-parlay-plans ----------
+
+class AiGenerateRequest(BaseModel):
+    """AI 策略推荐生成请求体(可反复重算,旧批次自动失效)。"""
+
+    business_date: datetime.date | None = Field(
+        default=None, description="竞彩售卖日,缺省为当天"
+    )
+    min_confidence: float = Field(
+        default=0.55, ge=0, le=1, description="置信度阈值(含)"
+    )
+
+
+class AiBatchSummaryRead(BaseModel):
+    """AI 推荐批次摘要响应模型。"""
+
+    batch_id: int
+    business_date: datetime.date
+    min_confidence: float
+    pick_count: int = Field(description="入选单场推荐数")
+    skipped_count: int = Field(description="跳过数(已开赛/赔率不可解析)")
+    plan_count: int = Field(description="串关候选方案数")
+    superseded_batch_ids: list[int] = Field(
+        default_factory=list, description="本次重算取代的旧批次 ID"
+    )
+    created_at: datetime.datetime
+
+
+class AiPickRead(BaseModel):
+    """AI 单场推荐明细响应模型(含比赛/联赛/主客队富字段)。"""
+
+    pick_id: int
+    batch_id: int
+    match_id: str
+    match_num_str: str = Field(description="场次编号,如 周二002")
+    league_name: str
+    match_time: datetime.datetime
+    home_team_name: str
+    away_team_name: str
+    play_code: str
+    play_name: str
+    recommendation: str = Field(description="LLM 原始推荐文案")
+    option_code: str
+    option_label: str
+    odds: float = Field(description="生成时点赔率快照")
+    confidence: float
+    implied_prob: float = Field(description="去水隐含概率")
+    ev: float = Field(description="期望值 = confidence * odds - 1")
+    kelly: float = Field(description="凯利建议资金比例,无正期望为 0")
+    is_contrarian: bool = Field(description="逆向腿 = 置信度低于市场隐含概率")
+    reasoning: str
+    decision_id: int | None = Field(
+        default=None, description="转决策后回填的决策 ID(已转换标记)"
+    )
+
+
+class AiParlayLegRead(BaseModel):
+    """AI 串关候选方案中的单条腿。"""
+
+    match_id: str
+    match_num_str: str
+    match_name: str
+    play_code: str
+    play_name: str
+    option_code: str
+    option_label: str
+    odds: float
+    confidence: float
+    is_contrarian: bool
+
+
+class AiParlayPlanRead(BaseModel):
+    """AI 串关候选方案响应模型。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    plan_id: int
+    batch_id: int
+    parlay_size: int
+    plan_name: str
+    plan_desc: str
+    legs: list[AiParlayLegRead]
+    combined_odds: float = Field(description="组合赔率 = Π odds")
+    combined_confidence: float = Field(
+        description="组合置信度 = Π confidence(腿间独立近似)"
+    )
+    ev: float
+    kelly: float
+    contrarian_count: int = Field(description="逆向腿数(≤ 2)")
+    scheme_id: int | None = Field(
+        default=None, description="保存为正式方案后回填(已保存标记)"
+    )
+    created_at: datetime.datetime
+
+
+class AiPickConvertRequest(BaseModel):
+    """单场推荐转模拟决策请求体。"""
+
+    user_id: int = Field(default=1, description="用户编号(暂存外部编号)")
+    stake_amount: float = Field(
+        default=100, gt=0, le=10_000, description="模拟注额"
+    )
+
+
+class AiPlanConvertRequest(BaseModel):
+    """串关候选转模拟方案请求体。"""
+
+    user_id: int = Field(default=1, description="用户编号(暂存外部编号)")
+    stake_per_bet: float = Field(
+        default=100, gt=0, le=10_000, description="每注模拟注额"
+    )
+
+
+class AiPickConvertResultRead(BaseModel):
+    """单场推荐转模拟决策结果(幂等:重复转换返回既有决策)。"""
+
+    decision: UserDecisionRead
+    created: bool = Field(description="本次调用是否新建(False=返回既有)")
+
+
+class AiPlanConvertResultRead(BaseModel):
+    """串关候选转模拟方案结果(幂等)。"""
+
+    scheme: BetSchemeRead
+    created: bool = Field(description="本次调用是否新建(False=返回既有)")

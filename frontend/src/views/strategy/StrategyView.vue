@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 策略与赔率模块视图:赔率走势 / AI 推荐(含归因标签)/ 模拟决策复盘 / 凯利指数。
+ * 策略与赔率模块视图:赔率走势 / AI 策略推荐(单场清单 + 自动串关)/ 模拟决策复盘 / 凯利指数。
  */
 import { computed, onMounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
@@ -8,9 +8,11 @@ import { useStrategyStore } from '@/stores/strategy'
 import OddsTrendChart, {
   type OddsTrendPoint,
 } from '@/components/strategy/OddsTrendChart.vue'
+import AiPickTable from '@/components/strategy/AiPickTable.vue'
+import AiParlayPlanCard from '@/components/strategy/AiParlayPlanCard.vue'
 
 const strategyStore = useStrategyStore()
-const { oddsHistory, recommendations, decisions, kellyResult, isLoading, error } =
+const { oddsHistory, decisions, kellyResult, isLoading, error } =
   storeToRefs(strategyStore)
 
 onMounted(() => {
@@ -71,34 +73,11 @@ const statusLabel: Record<string, string> = {
     />
     <p v-if="!hasRealOddsData" class="strategy-view__hint">演示数据 · 分项欧赔数据源接入后展示真实走势</p>
 
-    <h3 class="strategy-view__section-title">AI 策略推荐(含归因标签)</h3>
-    <table class="strategy-view__table">
-      <thead>
-        <tr>
-          <th>比赛</th><th>策略类型</th><th>推荐结果</th><th>置信度</th><th>归因标签</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-for="rec in recommendations" :key="rec.recommend_id">
-          <td>{{ rec.match_id }}</td>
-          <td>{{ rec.strategy_type }}</td>
-          <td>{{ rec.predicted_outcome }}</td>
-          <td>{{ (rec.confidence_score * 100).toFixed(0) }}%</td>
-          <td>
-            <span
-              v-for="tag in rec.logic_tags ?? []"
-              :key="tag"
-              class="strategy-view__tag"
-            >
-              {{ tag }}
-            </span>
-          </td>
-        </tr>
-        <tr v-if="recommendations.length === 0">
-          <td colspan="5" class="strategy-view__empty">暂无推荐</td>
-        </tr>
-      </tbody>
-    </table>
+    <h3 class="strategy-view__section-title">AI 策略推荐(单场清单,可转模拟决策)</h3>
+    <AiPickTable />
+
+    <h3 class="strategy-view__section-title">AI 串关候选(2-4 串,自动组合)</h3>
+    <AiParlayPlanCard />
 
     <h3 class="strategy-view__section-title">凯利指数(量化分析,不构成投注建议)</h3>
     <div class="strategy-view__kelly">
@@ -187,16 +166,6 @@ const statusLabel: Record<string, string> = {
     th {
       background: vars.$color-surface-hover;
     }
-  }
-
-  &__tag {
-    display: inline-block;
-    margin: 0 vars.$spacing-xs vars.$spacing-xs 0;
-    padding: vars.$spacing-xs vars.$spacing-sm;
-    background: vars.$color-primary-light;
-    border-radius: vars.$border-radius;
-    font-size: vars.$font-size-sm;
-    color: vars.$color-primary;
   }
 
   &__kelly {

@@ -1,7 +1,8 @@
 <script setup lang="ts">
 /**
  * 今日焦点推荐卡片(赛事中心右侧边栏):
- * 展示推荐场次、策略类型及置信度星级,点击跳转深度分析页。
+ * 数据源优先取 AI 策略推荐(最新生效批次,含赔率快照),
+ * 为空时回退到手工/自选推荐记录;点击跳转深度分析页。
  */
 import { computed } from 'vue'
 import { useRouter } from 'vue-router'
@@ -10,24 +11,57 @@ import { useStrategyStore } from '@/stores/strategy'
 
 const router = useRouter()
 const strategyStore = useStrategyStore()
-const { recommendations, isLoading } = storeToRefs(strategyStore)
+const { aiPicks, recommendations, isLoading } = storeToRefs(strategyStore)
 
-/** 按置信度取前 3 条作为今日焦点 */
-const focusList = computed(() =>
-  [...recommendations.value]
-    .sort((a, b) => b.confidence_score - a.confidence_score)
-    .slice(0, 3),
-)
-
-/** 置信度转星级(1-5 星) */
-const starCount = (confidence: number): number =>
-  Math.max(1, Math.round(confidence * 5))
+/** 焦点条目(AI 推荐与手工推荐归一后的展示结构) */
+interface FocusItem {
+  key: number
+  matchId: string
+  matchLabel: string
+  playLabel: string
+  outcome: string
+  confidence: number
+}
 
 const strategyLabel: Record<string, string> = {
   WIN_DRAW_LOSS: '胜平负',
   HANDICAP: '让球盘',
   SCORE: '比分',
+  TOTAL_GOALS: '总进球',
+  HALF_FULL: '半全场',
 }
+
+/** 按置信度取前 3 条作为今日焦点:优先 AI 推荐,空时回退推荐记录 */
+const focusList = computed<FocusItem[]>(() => {
+  if (aiPicks.value.length > 0) {
+    return [...aiPicks.value]
+      .sort((a, b) => b.confidence - a.confidence)
+      .slice(0, 3)
+      .map((pick) => ({
+        key: pick.pick_id,
+        matchId: pick.match_id,
+        matchLabel: pick.match_num_str || pick.match_id,
+        playLabel: pick.play_name,
+        outcome: `${pick.option_label} @ ${pick.odds.toFixed(2)}`,
+        confidence: pick.confidence,
+      }))
+  }
+  return [...recommendations.value]
+    .sort((a, b) => b.confidence_score - a.confidence_score)
+    .slice(0, 3)
+    .map((rec) => ({
+      key: rec.recommend_id,
+      matchId: rec.match_id,
+      matchLabel: rec.match_id,
+      playLabel: strategyLabel[rec.strategy_type] ?? rec.strategy_type,
+      outcome: rec.predicted_outcome,
+      confidence: rec.confidence_score,
+    }))
+})
+
+/** 置信度转星级(1-5 星) */
+const starCount = (confidence: number): number =>
+  Math.max(1, Math.round(confidence * 5))
 
 function handleJump(matchId: string): void {
   void router.push(`/match/${matchId}`)
@@ -42,30 +76,28 @@ function handleJump(matchId: string): void {
     <p v-else-if="focusList.length === 0" class="focus-card__hint">暂无推荐</p>
 
     <button
-      v-for="rec in focusList"
-      :key="rec.recommend_id"
+      v-for="item in focusList"
+      :key="item.key"
       type="button"
       class="focus-card__item"
-      @click="handleJump(rec.match_id)"
+      @click="handleJump(item.matchId)"
     >
       <div class="focus-card__item-top">
-        <span class="focus-card__match">{{ rec.match_id }}</span>
-        <span class="focus-card__type">
-          {{ strategyLabel[rec.strategy_type] ?? rec.strategy_type }}
-        </span>
+        <span class="focus-card__match">{{ item.matchLabel }}</span>
+        <span class="focus-card__type">{{ item.playLabel }}</span>
       </div>
-      <div class="focus-card__outcome">{{ rec.predicted_outcome }}</div>
-      <div class="focus-card__stars" :aria-label="`置信度 ${(rec.confidence_score * 100).toFixed(0)}%`">
+      <div class="focus-card__outcome">{{ item.outcome }}</div>
+      <div class="focus-card__stars" :aria-label="`置信度 ${(item.confidence * 100).toFixed(0)}%`">
         <span
           v-for="star in 5"
           :key="star"
           class="focus-card__star"
-          :class="{ 'focus-card__star--on': star <= starCount(rec.confidence_score) }"
+          :class="{ 'focus-card__star--on': star <= starCount(item.confidence) }"
         >
           ★
         </span>
         <span class="focus-card__confidence">
-          {{ (rec.confidence_score * 100).toFixed(0) }}%
+          {{ (item.confidence * 100).toFixed(0) }}%
         </span>
       </div>
     </button>

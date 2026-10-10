@@ -1,10 +1,21 @@
 """策略与赔率模块路由:三张表 CRUD + 凯利指数计算。"""
 
+import datetime
+
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.strategy.schemas import (
+    AiBatchSummaryRead,
+    AiGenerateRequest,
+    AiParlayPlanRead,
+    AiParlayLegRead,
+    AiPickConvertRequest,
+    AiPickConvertResultRead,
+    AiPickRead,
+    AiPlanConvertRequest,
+    AiPlanConvertResultRead,
     BetSchemeCreate,
     BetSchemeRead,
     DimensionStatRead,
@@ -40,7 +51,7 @@ from app.models import (
     Recommendation,
     UserDecision,
 )
-from app.services import crud, plan_analysis, review, settlement
+from app.services import crud, llm_query, plan_analysis, recommendation_engine, review, settlement
 from app.services.parlay import ParlayPick, list_bet_schemes, save_bet_scheme
 from app.services.poisson import kelly_fraction
 from app.services.user_picks import UserPick, create_user_picks
@@ -453,4 +464,161 @@ async def calculate_kelly(request: KellyRequest) -> KellyResponse:
             model_prob=request.model_prob,
             decimal_odds=request.decimal_odds,
         )
+    )
+
+
+# ---------- AI 策略推荐 /ai-recommendations /ai-picks /ai-parlay-plans ----------
+
+@router.post(
+    "/ai-recommendations/generate",
+    response_model=AiBatchSummaryRead,
+    status_code=status.HTTP_200_OK,
+    summary="生成 AI 策略推荐批次(可反复重算)",
+)
+async def generate_ai_recommendations(
+    payload: AiGenerateRequest, session: AsyncSession = Depends(get_db_session)
+) -> AiBatchSummaryRead:
+    """按售卖日汇总各场最新 AI 分析的分玩法推荐,生成单场推荐清单与串关候选。
+
+    每条推荐解析选项编码与生成时点赔率,计算去水隐含概率/EV/凯利;
+    已开赛或赔率不可解析的条目跳过(计入 skipped_count)。
+    同售卖日重复生成时旧批次自动失效(SUPERSEDED),历史保留。
+    分析结果仅供参考,不构成投注建议。
+    """
+    business_date = payload.business_date or llm_query.current_business_date()
+    summary = await recommendation_engine.generate_batch(
+        session,
+        business_date=business_date,
+        min_confidence=payload.min_confidence,
+    )
+    batch = summary.batch
+    return AiBatchSummaryRead(
+        batch_id=batch.batch_id,
+        business_date=batch.business_date,
+        min_confidence=float(batch.min_confidence),
+        pick_count=batch.pick_count,
+        skipped_count=batch.skipped_count,
+        plan_count=batch.plan_count,
+        superseded_batch_ids=summary.superseded_batch_ids,
+        created_at=batch.created_at,
+    )
+
+
+@router.get(
+    "/ai-picks",
+    response_model=list[AiPickRead],
+    summary="AI 单场推荐清单(最新生效批次)",
+)
+async def list_ai_picks(
+    business_date: datetime.date | None = Query(
+        default=None, description="售卖日,缺省取最近一个生效批次"
+    ),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=100),
+    session: AsyncSession = Depends(get_db_session),
+) -> list[AiPickRead]:
+    """查询 AI 单场推荐清单,按 EV 倒序;含玩法/赔率/置信度/EV/凯利与转换状态。"""
+    picks = await recommendation_engine.list_active_picks(
+        session, business_date=business_date, offset=offset, limit=limit
+    )
+    return [
+        AiPickRead(
+            pick_id=pick.pick_id,
+            batch_id=pick.batch_id,
+            match_id=pick.match_id,
+            match_num_str=pick.game.match_num_str,
+            league_name=pick.game.league.league_name,
+            match_time=pick.game.match_time,
+            home_team_name=pick.game.home_team.team_name,
+            away_team_name=pick.game.away_team.team_name,
+            play_code=pick.play_code,
+            play_name=pick.play_name,
+            recommendation=pick.recommendation,
+            option_code=pick.option_code,
+            option_label=pick.option_label,
+            odds=pick.odds,
+            confidence=pick.confidence,
+            implied_prob=pick.implied_prob,
+            ev=pick.ev,
+            kelly=pick.kelly,
+            is_contrarian=pick.is_contrarian,
+            reasoning=pick.reasoning,
+            decision_id=pick.decision_id,
+        )
+        for pick in picks
+    ]
+
+
+@router.get(
+    "/ai-parlay-plans",
+    response_model=list[AiParlayPlanRead],
+    summary="AI 串关候选方案(最新生效批次)",
+)
+async def list_ai_parlay_plans(
+    business_date: datetime.date | None = Query(
+        default=None, description="售卖日,缺省取最近一个生效批次"
+    ),
+    session: AsyncSession = Depends(get_db_session),
+) -> list[AiParlayPlanRead]:
+    """查询自动组出的 2-4 串候选方案(腿快照 + 组合赔率/置信度/EV/凯利)。
+
+    组合置信度按腿间独立近似(浅盘日让平存在相关性),
+    仅作分析参考,不构成投注建议。
+    """
+    return await recommendation_engine.list_active_plans(
+        session, business_date=business_date
+    )
+
+
+@router.post(
+    "/ai-picks/{pick_id}/convert",
+    response_model=AiPickConvertResultRead,
+    status_code=status.HTTP_200_OK,
+    summary="单场推荐转模拟决策(接入结算/复盘闭环)",
+)
+async def convert_ai_pick(
+    pick_id: int,
+    payload: AiPickConvertRequest,
+    session: AsyncSession = Depends(get_db_session),
+) -> AiPickConvertResultRead:
+    """将一条 AI 单场推荐转为用户模拟决策(幂等:重复转换返回既有决策)。
+
+    转换后由现有结算引擎按赛果结算命中与盈亏,复盘中心可见;
+    注额为模拟数据,仅用于复盘统计。
+    """
+    decision, created = await recommendation_engine.convert_pick_to_decision(
+        session,
+        pick_id=pick_id,
+        user_id=payload.user_id,
+        stake_amount=payload.stake_amount,
+    )
+    return AiPickConvertResultRead(
+        decision=UserDecisionRead.model_validate(decision), created=created
+    )
+
+
+@router.post(
+    "/ai-parlay-plans/{plan_id}/convert",
+    response_model=AiPlanConvertResultRead,
+    status_code=status.HTTP_200_OK,
+    summary="串关候选转模拟串关方案(幂等)",
+)
+async def convert_ai_parlay_plan(
+    plan_id: int,
+    payload: AiPlanConvertRequest,
+    session: AsyncSession = Depends(get_db_session),
+) -> AiPlanConvertResultRead:
+    """将一个 AI 串关候选方案保存为正式模拟串关方案(幂等)。
+
+    经串关组合规则校验(每场一玩法/注数上限)落库,
+    腿明细持有保存时点的赔率快照;注额为模拟数据。
+    """
+    scheme, created = await recommendation_engine.convert_plan_to_scheme(
+        session,
+        plan_id=plan_id,
+        user_id=payload.user_id,
+        stake_per_bet=payload.stake_per_bet,
+    )
+    return AiPlanConvertResultRead(
+        scheme=BetSchemeRead.model_validate(scheme), created=created
     )
