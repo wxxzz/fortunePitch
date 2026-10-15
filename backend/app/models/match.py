@@ -167,6 +167,35 @@ class MatchResult(Base):
     game: Mapped["MatchGame"] = relationship(back_populates="result")
 
 
+class MatchExtraInfo(Base):
+    """比赛补充信息表(fp_match_extra_info):人工录入的场外情报,每场一行。
+
+    由深度分析页"其他信息"Tab 录入(大文本自由填写),保存伤停/阵型等
+    竞彩网数据源之外的情报;聚合服务将其渲染进 AI 分析上下文提示词,
+    作为"人工录入补充信息"证据段支撑综合分析与基本面分析。
+    """
+
+    __tablename__ = "fp_match_extra_info"
+
+    match_id: Mapped[str] = mapped_column(
+        ForeignKey("fp_match_games.match_id"), primary_key=True
+    )
+    # 伤停信息:双方伤停/停赛球员与影响评估(自由文本)
+    injuries: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 阵型信息:预计首发阵型/战术打法(自由文本)
+    formations: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 其他补充:天气/裁判/战意等未归类的情报(自由文本)
+    other_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=datetime.datetime.now,
+        onupdate=datetime.datetime.now,
+    )
+
+    game: Mapped["MatchGame"] = relationship()
+
+
 class MatchEvent(Base):
     """比赛事件表(fp_match_events):滚球分析与事件驱动的关键节点。"""
 

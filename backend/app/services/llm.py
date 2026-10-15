@@ -39,7 +39,7 @@ from app.models import (
     MatchStatus,
     TeamFundamentals,
 )
-from app.services import insights
+from app.services import insights, match_extra_info
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +105,9 @@ class MatchAnalysisContext:
     # 高阶数据摘要(近况/交锋/Elo/强度/泊松,由 insights 服务派生;
     # 聚合失败时为 None,不阻断主分析)
     insights_text: str | None = None
+    # 人工录入补充信息文本块(伤停/阵型等,由深度分析页"其他信息"Tab
+    # 保存;未录入或全空为 None,不注入提示词)
+    extra_info_text: str | None = None
 
 
 class LlmPlayRecommendation(BaseModel):
@@ -212,6 +215,14 @@ async def build_match_analysis_context(
         logger.warning("高阶数据聚合失败,跳过该证据段", exc_info=True)
         insights_text = None
 
+    # 人工录入补充信息(伤停/阵型等):查询失败只降级,不阻断主分析
+    try:
+        extra_row = await match_extra_info.load_extra_info(session, match_id)
+        extra_info_text = match_extra_info.format_extra_info_text(extra_row)
+    except Exception:
+        logger.warning("补充信息读取失败,跳过该证据段", exc_info=True)
+        extra_info_text = None
+
     return MatchAnalysisContext(
         match_id=game.match_id,
         league_name=game.league.league_name,
@@ -226,6 +237,7 @@ async def build_match_analysis_context(
         fundamental_analysis=fundamental_analysis,
         trend_analysis=trend_analysis,
         insights_text=insights_text,
+        extra_info_text=extra_info_text,
     )
 
 
@@ -306,6 +318,8 @@ def build_analysis_messages(context: MatchAnalysisContext) -> list[dict[str, str
         "职责与边界:\n"
         "1. 只做数据分析,不做投注引导;结论是概率研判,不构成投注建议。\n"
         "2. 严格基于用户提供的联赛信息、球队基本面(积分榜战绩)和竞彩赔率推理,不得编造数据。\n"
+        "   若提供人工录入的伤停/阵型等补充信息,一并作为推理依据,但须与积分榜、赔率等\n"
+        "   系统数据交叉校验后再采信,存在矛盾时以系统数据为准并在理由中说明。\n"
         "3. 赔率隐含概率 = 1/赔率;可将各选项隐含概率归一后,与基本面强弱对照,判断分歧点。\n"
         "4. 数据缺失时(如某队未同步基本面)必须明确说明数据不足,并压低对应玩法置信度。\n"
         "\n"
@@ -345,6 +359,16 @@ def build_analysis_messages(context: MatchAnalysisContext) -> list[dict[str, str
     )
 
     status_label = _STATUS_LABELS.get(context.match_status, context.match_status.value)
+    # 人工录入补充信息段(伤停/阵型等):未录入时不注入,避免误导模型
+    extra_section = (
+        (
+            f"【人工录入补充信息(伤停/阵型等,可能含主观判断,须与系统数据交叉校验)】\n"
+            f"{context.extra_info_text}\n"
+            f"\n"
+        )
+        if context.extra_info_text
+        else ""
+    )
     user_prompt = (
         f"请分析以下竞彩比赛并输出分玩法推荐方案:\n"
         f"\n"
@@ -353,6 +377,7 @@ def build_analysis_messages(context: MatchAnalysisContext) -> list[dict[str, str
         f"- 对阵:{context.home_team_name}(主)vs {context.away_team_name}(客)\n"
         f"- 开赛时间:{context.match_time.strftime('%Y-%m-%d %H:%M')},状态:{status_label}\n"
         f"\n"
+        f"{extra_section}"
         f"【主队基本面(积分榜)】\n"
         f"{_format_fundamentals(context.home_team_name, context.home_fundamentals, '')}\n"
         f"{_format_fundamentals(context.home_team_name, context.home_fundamentals, 'home_')}\n"
@@ -568,6 +593,7 @@ async def analyze_match(context: MatchAnalysisContext) -> LlmAnalysis:
         "temperature": 0.3,
         "max_tokens": settings.LLM_MAX_TOKENS,
         "timeout_seconds": settings.LLM_TIMEOUT_SECONDS,
+        "analysis_type": "analysis",
     }
     log_base = {
         "match_id": context.match_id,
@@ -669,5 +695,24 @@ async def list_match_analyses(session: AsyncSession, match_id: str) -> list[Matc
         .where(MatchLlmAnalysis.match_id == match_id)
         .order_by(MatchLlmAnalysis.analysis_id.desc())
         .limit(_ANALYSIS_HISTORY_LIMIT)
+    )
+    return list((await session.execute(stmt)).scalars().all())
+
+
+async def list_request_logs(
+    session: AsyncSession, match_id: str, *, limit: int = 20
+) -> list[LlmRequestLog]:
+    """查询比赛的大模型调用日志(请求参数与响应结果),按时间倒序。
+
+    日志由 _write_request_log 用独立会话写入(业务回滚也不影响留存),
+    含综合分析 / 基本面分析 / 赔率走势分析三类调用,以
+    request_params.analysis_type 区分;match_id 列对球队维度分析存
+    "team:{id}" 标识,此处按比赛 ID 精确匹配,不会串入。
+    """
+    stmt = (
+        select(LlmRequestLog)
+        .where(LlmRequestLog.match_id == match_id)
+        .order_by(LlmRequestLog.log_id.desc())
+        .limit(limit)
     )
     return list((await session.execute(stmt)).scalars().all())

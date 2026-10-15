@@ -1,11 +1,12 @@
 """比赛与赛果模块 Pydantic Schema:比赛 / 事件。"""
 
 import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 from app.models import MatchStatus
+from app.services.match_extra_info import MAX_FIELD_LENGTH
 
 if TYPE_CHECKING:
     from app.services.insights import MatchInsights, TeamForm
@@ -96,6 +97,43 @@ class MatchScoreUpdate(BaseModel):
     away_score: int = Field(ge=0)
 
 
+# ---------- 比赛补充信息(人工录入) ----------
+
+
+class MatchExtraInfoUpsert(BaseModel):
+    """保存比赛补充信息请求体(整体覆盖语义,空文本等同清空)。"""
+
+    injuries: str = Field(
+        default="",
+        max_length=MAX_FIELD_LENGTH,
+        description="伤停信息(自由文本,双方伤停/停赛球员与影响)",
+    )
+    formations: str = Field(
+        default="",
+        max_length=MAX_FIELD_LENGTH,
+        description="阵型信息(自由文本,预计首发阵型/战术打法)",
+    )
+    other_notes: str = Field(
+        default="",
+        max_length=MAX_FIELD_LENGTH,
+        description="其他补充(自由文本,天气/裁判/战意等)",
+    )
+
+
+class MatchExtraInfoRead(BaseModel):
+    """比赛补充信息响应模型(未录入时返回空记录,updated_at 为 null)。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    match_id: str
+    injuries: str | None = Field(default=None, description="伤停信息;未录入为 null")
+    formations: str | None = Field(default=None, description="阵型信息;未录入为 null")
+    other_notes: str | None = Field(default=None, description="其他补充;未录入为 null")
+    updated_at: datetime.datetime | None = Field(
+        default=None, description="最近一次保存时间;从未录入为 null"
+    )
+
+
 # ---------- 大模型分析 ----------
 
 class LlmPlayRecommendationRead(BaseModel):
@@ -127,6 +165,44 @@ class LlmAnalysisRead(BaseModel):
 
 
 # ---------- 大模型基本面分析 ----------
+
+
+class LlmRequestLogRead(BaseModel):
+    """大模型调用日志响应模型(完整请求参数与响应结果,供排障查看)。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    log_id: int
+    provider: str = Field(description="服务商:qwen / ark")
+    model: str = Field(description="实际使用的模型名")
+    base_url: str = Field(description="OpenAI 兼容接口地址")
+    request_messages: list[dict[str, Any]] = Field(
+        description="完整提示词(system + user),JSON 数组原样保存"
+    )
+    request_params: dict[str, Any] = Field(
+        description="调用参数:temperature / max_tokens / timeout_seconds / analysis_type"
+    )
+    response_content: str | None = Field(
+        default=None, description="模型原始输出(解析前);失败时也可能保留用于排障"
+    )
+    status: str = Field(description="SUCCESS / FAILED")
+    http_status: int | None = Field(default=None, description="接口 HTTP 状态码")
+    prompt_tokens: int | None = Field(default=None, description="提示词 token 数")
+    completion_tokens: int | None = Field(default=None, description="输出 token 数")
+    total_tokens: int | None = Field(default=None, description="总 token 数")
+    duration_ms: int = Field(description="调用耗时(毫秒)")
+    error_message: str | None = Field(default=None, description="失败摘要")
+    error_detail: str | None = Field(default=None, description="失败详情")
+    created_at: datetime.datetime = Field(description="调用时间")
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def analysis_type(self) -> str:
+        """调用类型:analysis=综合分析 / fundamental=基本面 / odds_trend=赔率走势。
+
+        早期综合分析日志未写入该键,按缺省回退为 analysis。
+        """
+        return str(self.request_params.get("analysis_type") or "analysis")
 
 
 class LlmFundamentalDimensionRead(BaseModel):

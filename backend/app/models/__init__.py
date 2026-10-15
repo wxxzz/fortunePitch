@@ -20,6 +20,7 @@ from app.models.base import (
 )
 from app.models.match import (
     MatchEvent,
+    MatchExtraInfo,
     MatchGame,
     MatchLlmAnalysis,
     MatchLlmFundAnalysis,
@@ -53,6 +54,7 @@ __all__ = [
     "TeamMatch",
     "MatchGame",
     "MatchEvent",
+    "MatchExtraInfo",
     "MatchOdds",
     "MatchOddsSnapshot",
     "MatchResult",

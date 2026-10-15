@@ -13,11 +13,14 @@ from app.api.v1.match.schemas import (
     LlmRecommendationRowRead,
     LlmTrendAnalysisRead,
     MatchEventCreate,
+    MatchExtraInfoRead,
+    MatchExtraInfoUpsert,
     MatchResultStatsRead,
     MatchEventRead,
     MatchGameCreate,
     MatchGameRead,
     MatchInsightsRead,
+    LlmRequestLogRead,
     MatchOddsSnapshotRead,
     MatchResultRead,
     MatchScoreUpdate,
@@ -33,7 +36,15 @@ from app.models import (
     MatchOddsSnapshot,
     MatchStatus,
 )
-from app.services import crud, insights, llm, llm_fundamental, llm_odds_trend, llm_query
+from app.services import (
+    crud,
+    insights,
+    llm,
+    llm_fundamental,
+    llm_odds_trend,
+    llm_query,
+    match_extra_info,
+)
 
 router = APIRouter(prefix="/match", tags=["match"], dependencies=[Depends(verify_api_key)])
 
@@ -98,6 +109,56 @@ async def get_game(match_id: str, session: AsyncSession = Depends(get_db_session
     if game is None:
         raise ResourceNotFoundError(MatchGame.__tablename__, match_id)
     return game
+
+
+@router.get(
+    "/games/{match_id}/extra-info",
+    response_model=MatchExtraInfoRead,
+    summary="查询比赛补充信息(伤停/阵型等人工录入)",
+)
+async def get_extra_info(
+    match_id: str, session: AsyncSession = Depends(get_db_session)
+) -> MatchExtraInfoRead:
+    """查询比赛的补充信息,未录入过时返回空记录(updated_at 为 null)。
+
+    Raises:
+        ResourceNotFoundError: 比赛不存在。
+    """
+    game = await session.get(MatchGame, match_id)
+    if game is None:
+        raise ResourceNotFoundError(MatchGame.__tablename__, match_id)
+    row = await match_extra_info.load_extra_info(session, match_id)
+    if row is None:
+        return MatchExtraInfoRead(match_id=match_id)
+    return MatchExtraInfoRead.model_validate(row)
+
+
+@router.put(
+    "/games/{match_id}/extra-info",
+    response_model=MatchExtraInfoRead,
+    summary="保存比赛补充信息(伤停/阵型等人工录入)",
+)
+async def save_extra_info(
+    match_id: str,
+    payload: MatchExtraInfoUpsert,
+    session: AsyncSession = Depends(get_db_session),
+) -> MatchExtraInfoRead:
+    """保存(整体覆盖)比赛的补充信息,每场一行,重复保存为更新。
+
+    保存后由 AI 分析(综合/基本面)聚合为"人工录入补充信息"证据段,
+    随提示词注入大模型推理。
+
+    Raises:
+        ResourceNotFoundError: 比赛不存在。
+    """
+    row = await match_extra_info.upsert_extra_info(
+        session,
+        match_id=match_id,
+        injuries=payload.injuries,
+        formations=payload.formations,
+        other_notes=payload.other_notes,
+    )
+    return MatchExtraInfoRead.model_validate(row)
 
 
 @router.get(
@@ -238,6 +299,34 @@ async def list_llm_analyses(
     return [
         LlmAnalysisRead.model_validate(row)
         for row in await llm.list_match_analyses(session, match_id)
+    ]
+
+
+@router.get(
+    "/games/{match_id}/llm-request-logs",
+    response_model=list[LlmRequestLogRead],
+    summary="查询比赛的大模型调用日志(请求参数与响应结果)",
+)
+async def list_llm_request_logs(
+    match_id: str,
+    limit: int = Query(default=20, ge=1, le=100),
+    session: AsyncSession = Depends(get_db_session),
+) -> list[LlmRequestLogRead]:
+    """查询比赛的大模型调用日志,按调用时间倒序,供深度分析页排障查看。
+
+    含综合分析 / 基本面分析 / 赔率走势分析三类调用,以
+    analysis_type 区分;每条含完整提示词、调用参数、模型原始输出、
+    token 计量与耗时,失败调用同样留痕。
+
+    Raises:
+        ResourceNotFoundError: 比赛不存在。
+    """
+    game = await session.get(MatchGame, match_id)
+    if game is None:
+        raise ResourceNotFoundError(MatchGame.__tablename__, match_id)
+    return [
+        LlmRequestLogRead.model_validate(row)
+        for row in await llm.list_request_logs(session, match_id, limit=limit)
     ]
 
 

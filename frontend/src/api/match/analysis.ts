@@ -171,3 +171,43 @@ export async function listLlmRecommendations(
   )
   return data
 }
+
+/** 单条提示词消息(system / user) */
+export interface LlmRequestMessage {
+  role: string
+  content: string
+}
+
+/** 大模型调用日志(完整请求参数与响应结果,供排障查看) */
+export interface LlmRequestLog {
+  log_id: number
+  provider: string
+  model: string
+  base_url: string
+  request_messages: LlmRequestMessage[]
+  request_params: Record<string, unknown>
+  response_content: string | null
+  status: 'SUCCESS' | 'FAILED'
+  http_status: number | null
+  prompt_tokens: number | null
+  completion_tokens: number | null
+  total_tokens: number | null
+  duration_ms: number
+  error_message: string | null
+  error_detail: string | null
+  created_at: string
+  /** 调用类型:analysis=综合分析 / fundamental=基本面 / odds_trend=赔率走势 */
+  analysis_type: string
+}
+
+/** 查询比赛的大模型调用日志(按调用时间倒序,含三类分析与失败调用) */
+export async function listLlmRequestLogs(
+  matchId: string,
+  limit = 20,
+): Promise<LlmRequestLog[]> {
+  const { data } = await request.get<LlmRequestLog[]>(
+    `/api/v1/match/games/${matchId}/llm-request-logs`,
+    { params: { limit } },
+  )
+  return data
+}

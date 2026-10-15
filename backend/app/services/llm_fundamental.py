@@ -38,7 +38,7 @@ from app.models import (
     TeamMatch,
     TeamProfile,
 )
-from app.services import llm
+from app.services import llm, match_extra_info
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +86,9 @@ class FundamentalAnalysisContext:
     away_upcoming: tuple[TeamMatch, ...]
     # 历史交锋(从主队看板视角,按时间倒序)
     h2h: tuple[TeamMatch, ...]
+    # 人工录入补充信息文本块(伤停/阵型等,由深度分析页"其他信息"Tab
+    # 保存;未录入或全空为 None,不注入提示词)
+    extra_info_text: str | None = None
 
 
 class LlmFundamentalDimension(BaseModel):
@@ -225,6 +228,14 @@ async def build_fundamental_context(
             opponent_uniform_id=away_uniform_id,
         )
 
+    # 人工录入补充信息(伤停/阵型等):读取失败只降级,不阻断主分析
+    try:
+        extra_row = await match_extra_info.load_extra_info(session, match_id)
+        extra_info_text = match_extra_info.format_extra_info_text(extra_row)
+    except Exception:
+        logger.warning("补充信息读取失败,跳过该证据段", exc_info=True)
+        extra_info_text = None
+
     return FundamentalAnalysisContext(
         match_id=game.match_id,
         league_name=game.league.league_name,
@@ -242,6 +253,7 @@ async def build_fundamental_context(
         home_upcoming=home_upcoming,
         away_upcoming=away_upcoming,
         h2h=h2h,
+        extra_info_text=extra_info_text,
     )
 
 
@@ -298,6 +310,8 @@ def build_fundamental_messages(context: FundamentalAnalysisContext) -> list[dict
         "职责与边界:\n"
         "1. 只做基本面数据分析,不做投注引导;结论是数据研判,不构成投注建议。\n"
         "2. 严格基于用户提供的球队档案、积分榜战绩、近期赛程赛果与历史交锋推理,不得编造数据。\n"
+        "   若提供人工录入的伤停/阵型等补充信息,一并作为推理依据,但须与积分榜、赛果等\n"
+        "   系统数据交叉校验后再采信,存在矛盾时以系统数据为准并在结论中说明。\n"
         "3. 数据缺失时(如某队未同步近期战绩)必须在对应维度明确说明数据不足,不得臆测,并将该维度 edge 判为 even。\n"
         "\n"
         "分析维度(固定六个,按此顺序输出):\n"
@@ -326,6 +340,16 @@ def build_fundamental_messages(context: FundamentalAnalysisContext) -> list[dict
         context.match_status, context.match_status.value
     )
     fmt = llm._format_fundamentals
+    # 人工录入补充信息段(伤停/阵型等):未录入时不注入,避免误导模型
+    extra_section = (
+        (
+            f"【人工录入补充信息(伤停/阵型等,可能含主观判断,须与系统数据交叉校验)】\n"
+            f"{context.extra_info_text}\n"
+            f"\n"
+        )
+        if context.extra_info_text
+        else ""
+    )
     user_prompt = (
         f"请基于以下数据对比赛做基本面多维度分析:\n"
         f"\n"
@@ -334,6 +358,7 @@ def build_fundamental_messages(context: FundamentalAnalysisContext) -> list[dict
         f"- 对阵:{context.home_team_name}(主)vs {context.away_team_name}(客)\n"
         f"- 开赛时间:{context.match_time.strftime('%Y-%m-%d %H:%M')},状态:{status_label}\n"
         f"\n"
+        f"{extra_section}"
         f"【球队档案】\n"
         f"{_format_profile(context.home_team_name, context.home_profile)}\n"
         f"{_format_profile(context.away_team_name, context.away_profile)}\n"

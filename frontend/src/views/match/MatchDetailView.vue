@@ -1,8 +1,8 @@
 <script setup lang="ts">
 /**
  * 页面B:赛事深度分析(Match Detail)- 详情页。
- * 顶部对战卡片 + Tab 导航(基本面|历史交锋|高阶数据|赔率走势|策略推荐)
- * + 内容区(结论卡片 / SHAP 归因 / 风险提示)。
+ * 顶部对战卡片 + Tab 导航(基本面|历史交锋|高阶数据|赔率走势|策略推荐|其他信息|AI 分析)
+ * + 内容区(结论卡片 / SHAP 归因 / 风险提示 / 人工录入补充信息)。
  */
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -28,10 +28,15 @@ import {
   getTeamFundamentals,
   type TeamFundamentals,
 } from '@/api/base/team'
+import {
+  getMatchExtraInfo,
+  saveMatchExtraInfo,
+} from '@/api/match/extraInfo'
 import ShapAttributionChart, {
   type ShapFeature,
 } from '@/components/analytics/ShapAttributionChart.vue'
 import OddsTrendChart from '@/components/strategy/OddsTrendChart.vue'
+import LlmLogViewer from '@/components/match/LlmLogViewer.vue'
 import SkeletonBlock from '@/components/common/SkeletonBlock.vue'
 
 const route = useRoute()
@@ -54,6 +59,7 @@ onMounted(async () => {
   void strategyStore.fetchAll()
   void loadSavedAnalysis()
   void loadSavedFundamentalAnalysis()
+  void loadExtraInfo()
   try {
     game.value = await getGame(matchId)
     // 比赛详情就绪后并行拉取双方球队基本面(未同步过时按无数据处理)
@@ -180,7 +186,7 @@ const teamName = (teamId: number): string =>
 
 // ---------- Tab 导航 ----------
 
-const TABS = ['基本面', '历史交锋', '高阶数据', '赔率走势', '策略推荐', 'AI 分析'] as const
+const TABS = ['基本面', '历史交锋', '高阶数据', '赔率走势', '策略推荐', '其他信息', 'AI 分析'] as const
 const activeTab = ref<(typeof TABS)[number]>('策略推荐')
 
 // ---------- 高阶数据 / 历史交锋 Tab 数据(懒加载,payload 两 Tab 共享) ----------
@@ -389,6 +395,9 @@ async function handleRunTrendAnalysis(): Promise<void> {
       err instanceof Error ? err.message : '赔率走势分析失败,请稍后重试'
   } finally {
     isTrendLlmLoading.value = false
+    // 基本面/走势分析的日志也按比赛 ID 留痕,防御性刷新日志查看器
+    // (当前日志查看器仅挂在 AI 分析 Tab,未挂载时此处为空操作)
+    llmLogViewer.value?.refresh()
   }
 }
 
@@ -411,6 +420,8 @@ function handleBack(): void {
 const llmAnalysis = ref<LlmAnalysis | null>(null)
 const isLlmLoading = ref(false)
 const llmError = ref<string | null>(null)
+/** 分析日志查看器(生成成功或失败后刷新,失败调用同样留痕) */
+const llmLogViewer = ref<InstanceType<typeof LlmLogViewer> | null>(null)
 
 /** 服务商标识转展示名 */
 const PROVIDER_LABELS: Record<string, string> = {
@@ -428,6 +439,8 @@ async function handleRunAnalysis(): Promise<void> {
     llmError.value = err instanceof Error ? err.message : '大模型分析失败,请稍后重试'
   } finally {
     isLlmLoading.value = false
+    // 成功与失败调用都会写日志,生成结束后刷新日志列表
+    llmLogViewer.value?.refresh()
   }
 }
 
@@ -465,6 +478,9 @@ async function handleRunFundamentalAnalysis(): Promise<void> {
       err instanceof Error ? err.message : '基本面分析失败,请稍后重试'
   } finally {
     isFundamentalLlmLoading.value = false
+    // 基本面分析的日志也按比赛 ID 留痕,防御性刷新日志查看器
+    // (当前日志查看器仅挂在 AI 分析 Tab,未挂载时此处为空操作)
+    llmLogViewer.value?.refresh()
   }
 }
 
@@ -475,6 +491,77 @@ async function loadSavedFundamentalAnalysis(): Promise<void> {
     llmFundamental.value = await getLlmFundamentalAnalysis(matchId)
   } catch {
     // 未生成过(404)或其他异常均视为无已保存结果,由用户手动生成
+  }
+}
+
+// ---------- 其他信息 Tab:人工录入补充信息(伤停/阵型等) ----------
+
+/** 单字段录入上限(与后端 schema 对齐) */
+const EXTRA_FIELD_MAX_LENGTH = 5000
+
+const extraInfoForm = ref({ injuries: '', formations: '', other_notes: '' })
+/** 最近一次已保存的快照,用于未保存更改提示 */
+const savedExtraInfo = ref({ injuries: '', formations: '', other_notes: '' })
+const extraInfoUpdatedAt = ref<string | null>(null)
+const isExtraLoading = ref(true)
+const isExtraSaving = ref(false)
+const extraLoadError = ref<string | null>(null)
+const extraSaveError = ref<string | null>(null)
+const extraSaveMessage = ref('')
+
+/** 表单内容与最近一次保存的快照不一致时提示,避免误切 Tab 丢失编辑 */
+const isExtraDirty = computed(
+  () =>
+    extraInfoForm.value.injuries !== savedExtraInfo.value.injuries ||
+    extraInfoForm.value.formations !== savedExtraInfo.value.formations ||
+    extraInfoForm.value.other_notes !== savedExtraInfo.value.other_notes,
+)
+
+/** 顶部对战卡片的阵型摘要:取已录入阵型的首行,未录入时提示录入入口 */
+const heroFormationText = computed(() => {
+  const text = extraInfoForm.value.formations.trim()
+  if (!text) return '伤停/阵型信息可在"其他信息"页签录入'
+  return `阵型:${text.split('\n')[0]}`
+})
+
+/** 加载已保存的补充信息(未录入时后端返回空记录) */
+async function loadExtraInfo(): Promise<void> {
+  isExtraLoading.value = true
+  extraLoadError.value = null
+  try {
+    const data = await getMatchExtraInfo(matchId)
+    extraInfoForm.value = {
+      injuries: data.injuries ?? '',
+      formations: data.formations ?? '',
+      other_notes: data.other_notes ?? '',
+    }
+    savedExtraInfo.value = { ...extraInfoForm.value }
+    extraInfoUpdatedAt.value = data.updated_at
+  } catch (err) {
+    extraLoadError.value = err instanceof Error ? err.message : '补充信息加载失败'
+  } finally {
+    isExtraLoading.value = false
+  }
+}
+
+/** 保存补充信息(整体覆盖语义),成功后提示注入生效范围 */
+async function handleSaveExtraInfo(): Promise<void> {
+  if (isExtraSaving.value) return
+  isExtraSaving.value = true
+  extraSaveError.value = null
+  extraSaveMessage.value = ''
+  try {
+    const data = await saveMatchExtraInfo(matchId, { ...extraInfoForm.value })
+    savedExtraInfo.value = { ...extraInfoForm.value }
+    extraInfoUpdatedAt.value = data.updated_at
+    extraSaveMessage.value = '已保存,后续 AI 综合分析与基本面分析将自动带上本页信息'
+    window.setTimeout(() => {
+      extraSaveMessage.value = ''
+    }, 4000)
+  } catch (err) {
+    extraSaveError.value = err instanceof Error ? err.message : '补充信息保存失败'
+  } finally {
+    isExtraSaving.value = false
   }
 }
 </script>
@@ -502,7 +589,7 @@ async function loadSavedFundamentalAnalysis(): Promise<void> {
           <span class="match-detail__meta">
             {{ new Date(game.match_time).toLocaleString() }} · 编号 {{ game.match_id }}
           </span>
-          <span class="match-detail__formation">阵型 4-3-3 vs 4-2-3-1(首发与伤停可视化待接入)</span>
+          <span class="match-detail__formation">{{ heroFormationText }}</span>
         </div>
         <div class="match-detail__team">
           <span class="match-detail__badge">{{ teamName(game.away_team_id).slice(0, 2) }}</span>
@@ -1039,6 +1126,83 @@ async function loadSavedFundamentalAnalysis(): Promise<void> {
           </p>
         </div>
 
+        <div v-else-if="activeTab === '其他信息'" class="match-detail__panel">
+          <p class="match-detail__hint">
+            人工录入的场外情报(自由文本),保存后自动注入 AI 综合分析与基本面分析的
+            提示词,作为"人工录入补充信息"证据段;三个字段均为空时不注入。
+            重新保存后需重新生成 AI 分析才会体现最新内容。
+          </p>
+
+          <p v-if="extraLoadError" class="match-detail__error" role="alert">
+            {{ extraLoadError }}
+            <button
+              class="match-detail__extra-retry"
+              type="button"
+              @click="loadExtraInfo"
+            >
+              重新加载
+            </button>
+          </p>
+          <SkeletonBlock v-else-if="isExtraLoading" :height="320" label="加载补充信息…" />
+
+          <template v-else>
+            <label class="match-detail__extra-field">
+              <span class="match-detail__extra-label">伤停信息</span>
+              <textarea
+                v-model="extraInfoForm.injuries"
+                rows="6"
+                :maxlength="EXTRA_FIELD_MAX_LENGTH"
+                placeholder="双方伤停/停赛球员与影响评估,如:主队中场核心累积黄牌停赛;客队主力中卫拉伤缺阵"
+              />
+            </label>
+
+            <label class="match-detail__extra-field">
+              <span class="match-detail__extra-label">阵型信息</span>
+              <textarea
+                v-model="extraInfoForm.formations"
+                rows="4"
+                :maxlength="EXTRA_FIELD_MAX_LENGTH"
+                placeholder="预计首发阵型/战术打法,如:主队 4-3-3 高位压迫;客队 4-2-3-1 防守反击"
+              />
+            </label>
+
+            <label class="match-detail__extra-field">
+              <span class="match-detail__extra-label">其他补充</span>
+              <textarea
+                v-model="extraInfoForm.other_notes"
+                rows="4"
+                :maxlength="EXTRA_FIELD_MAX_LENGTH"
+                placeholder="天气/裁判/战意等其他值得注意的情报"
+              />
+            </label>
+
+            <div class="match-detail__llm-toolbar">
+              <button
+                class="match-detail__llm-button"
+                type="button"
+                :disabled="isExtraSaving"
+                :aria-busy="isExtraSaving"
+                @click="handleSaveExtraInfo"
+              >
+                {{ isExtraSaving ? '保存中…' : '保存补充信息' }}
+              </button>
+              <p v-if="isExtraDirty" class="match-detail__extra-dirty" role="status">
+                有未保存的更改,切换页签前请先保存
+              </p>
+              <p v-if="extraInfoUpdatedAt" class="match-detail__hint">
+                最近保存:{{ new Date(extraInfoUpdatedAt).toLocaleString() }}
+              </p>
+            </div>
+
+            <p v-if="extraSaveMessage" class="match-detail__extra-saved" role="status">
+              {{ extraSaveMessage }}
+            </p>
+            <p v-if="extraSaveError" class="match-detail__error" role="alert">
+              {{ extraSaveError }}
+            </p>
+          </template>
+        </div>
+
         <div v-else-if="activeTab === 'AI 分析'" class="match-detail__panel">
           <div class="match-detail__llm-toolbar">
             <button
@@ -1114,6 +1278,9 @@ async function loadSavedFundamentalAnalysis(): Promise<void> {
             点击"生成 AI 分析",大模型将基于本场基本面、赔率与联赛信息,
             并结合已生成的 AI 基本面分析与赔率走势分析结论,输出各竞彩玩法的推荐方案。
           </p>
+
+          <!-- 分析日志:查看每次大模型调用的请求参数与响应结果 -->
+          <LlmLogViewer ref="llmLogViewer" :match-id="matchId" />
         </div>
       </div>
     </template>
@@ -1708,6 +1875,63 @@ async function loadSavedFundamentalAnalysis(): Promise<void> {
       background: rgba(30, 100, 190, 0.12);
       color: #1e64be;
     }
+  }
+
+  &__extra-field {
+    display: flex;
+    flex-direction: column;
+    gap: vars.$spacing-xs;
+  }
+
+  &__extra-label {
+    font-size: vars.$font-size-sm;
+    font-weight: 600;
+    color: vars.$color-text-primary;
+  }
+
+  textarea {
+    padding: vars.$spacing-sm vars.$spacing-md;
+    border: 1px solid vars.$color-border;
+    border-radius: vars.$border-radius;
+    background: vars.$color-surface;
+    color: vars.$color-text-primary;
+    font-size: vars.$font-size-sm;
+    line-height: 1.6;
+    resize: vertical;
+
+    &:focus {
+      outline: none;
+      border-color: vars.$color-primary;
+    }
+  }
+
+  &__extra-dirty {
+    margin: 0;
+    font-size: vars.$font-size-sm;
+    color: vars.$color-warning;
+  }
+
+  &__extra-retry {
+    margin-left: vars.$spacing-sm;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: vars.$color-primary;
+    font-size: vars.$font-size-sm;
+    cursor: pointer;
+
+    &:hover {
+      text-decoration: underline;
+    }
+  }
+
+  &__extra-saved {
+    margin: 0;
+    padding: vars.$spacing-sm vars.$spacing-md;
+    border-radius: vars.$border-radius;
+    background: vars.$color-primary-light;
+    color: vars.$color-primary;
+    font-size: vars.$font-size-sm;
   }
 
   &__table {
