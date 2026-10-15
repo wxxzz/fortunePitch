@@ -9,3 +9,4 @@
 - [球队AI维度分析](team-llm-analysis-feature.md) - 镜像llm_fundamental五段式(六维strong/average/weak)、新表fp_llm_team_analyses+dims、日志match_id="team:{id}"、POST/GET /base/teams/{id}/llm-analysis
 - [联赛批量看板同步](league-dashboard-batch-sync.md) - /base 球队列表「批量同步看板」、本地已入库球队逐队sync_team_dashboard单队失败跳过、POST /collector/team-dashboard/sync-league、前端600s超时
 - [AI策略推荐功能](ai-strategy-recommendation.md) - LLM分析→批次/单场/串关三表、逆向腿≤2、转决策桥接Recommendation、闭环结算、POST /strategy/ai-recommendations/generate
+- [联赛看板页](league-dashboard.md) - /leagues 平铺卡片墙→单联赛看板(基本信息/积分榜总榜/近期赛程赛果)、Team左联Fundamentals NULLS LAST、GET /base/leagues/{id}/dashboard

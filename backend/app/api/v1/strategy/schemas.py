@@ -436,13 +436,20 @@ class AiParlayPlanRead(BaseModel):
 
     plan_id: int
     batch_id: int
-    parlay_size: int
+    parlay_size: int = Field(
+        description="N串1 的 N;复合方案(腿数 > N)为 M 场任取 N 场过关"
+    )
     plan_name: str
     plan_desc: str
     legs: list[AiParlayLegRead]
-    combined_odds: float = Field(description="组合赔率 = Π odds")
+    combined_odds: float = Field(
+        description="组合赔率:单式 = Π odds;复合 = 最高单注赔率"
+    )
     combined_confidence: float = Field(
-        description="组合置信度 = Π confidence(腿间独立近似)"
+        description=(
+            "组合置信度:单式 = Π confidence;复合 = 平均单注命中概率"
+            "(腿间独立近似)"
+        )
     )
     ev: float
     kelly: float

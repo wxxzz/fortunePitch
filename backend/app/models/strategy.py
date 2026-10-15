@@ -281,7 +281,7 @@ class AiParlayPlan(Base):
     batch_id: Mapped[int] = mapped_column(
         ForeignKey("fp_strategy_ai_pick_batches.batch_id"), nullable=False, index=True
     )
-    # 2~4 串 1
+    # N串1 的 N;复合方案(5-6 场任取 N 场过关)时小于腿数
     parlay_size: Mapped[int] = mapped_column(Integer, nullable=False)
     # 方案名,如"稳胆 2串1" / "价值混合 4串1"
     plan_name: Mapped[str] = mapped_column(String(64), nullable=False)

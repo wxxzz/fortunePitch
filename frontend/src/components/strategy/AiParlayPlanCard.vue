@@ -1,16 +1,19 @@
 <script setup lang="ts">
 /**
  * AI 串关候选方案卡片:
- * 展示自动组出的 2-4 串候选(逐腿快照 + 组合赔率/置信度/EV/凯利),
- * 可一键保存为正式模拟串关方案(经串关组合规则校验)。
+ * 展示自动组出的候选方案(单式 2-4 串 + 复合 5-6 场 3/4 串),
+ * 逐腿快照 + 组合赔率/置信度/EV/凯利,可一键保存为正式模拟串关方案
+ * (经串关组合规则校验)。
  *
- * 组合置信度按腿间独立近似(浅盘日让平存在相关性);
- * 注额均为模拟数据,分析结果仅供参考,不构成投注建议。
+ * 复合方案(M 场任取 N 场过关)注数 = C(场次数, 串关数),
+ * 组合指标按平均单注口径;组合置信度按腿间独立近似
+ * (浅盘日让平存在相关性);注额均为模拟数据,
+ * 分析结果仅供参考,不构成投注建议。
  */
 import { ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useStrategyStore } from '@/stores/strategy'
-import { convertAiParlayPlan } from '@/api/strategy/aiPick'
+import { convertAiParlayPlan, type AiParlayPlan } from '@/api/strategy/aiPick'
 
 const strategyStore = useStrategyStore()
 const { aiPlans } = storeToRefs(strategyStore)
@@ -20,6 +23,27 @@ const DEFAULT_STAKE_PER_BET = 100
 const stakes = ref<Record<number, number>>({})
 const convertingIds = ref<Set<number>>(new Set())
 const convertMessage = ref<string | null>(null)
+
+/** 复合方案:腿数 > 串关数(M 场任取 N 场过关) */
+function isComposite(plan: AiParlayPlan): boolean {
+  return plan.legs.length > plan.parlay_size
+}
+
+/** 组合数 C(n, k):复合方案的注数 */
+function betCount(plan: AiParlayPlan): number {
+  const n = plan.legs.length
+  const k = plan.parlay_size
+  let result = 1
+  for (let i = 0; i < k; i += 1) {
+    result = (result * (n - i)) / (i + 1)
+  }
+  return Math.round(result)
+}
+
+/** 复合方案按当前注额输入的预计总投入(注数 x 每注注额) */
+function estimatedTotalStake(plan: AiParlayPlan): number {
+  return betCount(plan) * (stakes.value[plan.plan_id] || DEFAULT_STAKE_PER_BET)
+}
 
 async function handleConvert(planId: number): Promise<void> {
   convertingIds.value = new Set(convertingIds.value).add(planId)
@@ -50,7 +74,7 @@ async function handleConvert(planId: number): Promise<void> {
     </p>
 
     <div v-if="aiPlans.length === 0" class="ai-parlay-plan__empty">
-      暂无串关候选 · 生成推荐后将自动从高置信代表腿组 2-4 串方案
+      暂无串关候选 · 生成推荐后将自动从高置信代表腿组 2-4 串及复合(5-6 场 3/4 串)方案
     </div>
 
     <div
@@ -80,11 +104,18 @@ async function handleConvert(planId: number): Promise<void> {
       </ul>
 
       <div class="ai-parlay-plan__metrics">
-        <span>组合赔率 <strong>{{ plan.combined_odds.toFixed(2) }}</strong></span>
+        <span>{{ isComposite(plan) ? '最高单注赔率' : '组合赔率' }} <strong>{{ plan.combined_odds.toFixed(2) }}</strong></span>
         <span>组合置信度 <strong>{{ (plan.combined_confidence * 100).toFixed(1) }}%</strong></span>
         <span>EV <strong>{{ (plan.ev * 100).toFixed(1) }}%</strong></span>
         <span>凯利 <strong>{{ (plan.kelly * 100).toFixed(1) }}%</strong></span>
         <span>逆向腿 <strong>{{ plan.contrarian_count }}</strong>/2</span>
+        <span v-if="isComposite(plan)">
+          注数 <strong>{{ betCount(plan) }}</strong>
+          ({{ plan.legs.length }} 场任取 {{ plan.parlay_size }} 场)
+        </span>
+        <span v-if="isComposite(plan)">
+          预计总投入 <strong>{{ estimatedTotalStake(plan).toFixed(0) }}</strong>
+        </span>
       </div>
 
       <div class="ai-parlay-plan__footer">
@@ -112,7 +143,8 @@ async function handleConvert(planId: number): Promise<void> {
     </div>
 
     <p class="ai-parlay-plan__disclaimer">
-      组合置信度按腿间独立近似(浅盘日让平存在相关性);逆向腿数不超过 2 条(校准规则)。
+      组合置信度按腿间独立近似(浅盘日让平存在相关性);复合方案(M 场任取 N 场过关)的
+      注数为组合数 C(场次数, 串关数),组合指标按平均单注口径;逆向腿数不超过 2 条(校准规则)。
       模拟投注 · 分析结果仅供参考,不构成投注建议。
     </p>
   </div>

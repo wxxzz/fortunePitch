@@ -16,8 +16,8 @@ const strategyStore = useStrategyStore()
 const { aiPicks, aiBatch, aiBusinessDate, isGenerating } =
   storeToRefs(strategyStore)
 
-/** 置信度阈值选项(后端按该值过滤 AI 分析推荐) */
-const CONFIDENCE_OPTIONS = [0.5, 0.55, 0.6, 0.65, 0.7] as const
+/** 置信度阈值选项(后端按该值过滤 AI 分析推荐;低阈值覆盖更多冷门方向) */
+const CONFIDENCE_OPTIONS = [0.3, 0.4, 0.5, 0.55, 0.6, 0.65, 0.7] as const
 const minConfidence = ref<number>(0.55)
 
 /** 默认模拟注额 */

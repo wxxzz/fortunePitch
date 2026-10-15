@@ -3,7 +3,8 @@
 数据流:每场最新 AI 分析的分玩法推荐(fp_match_llm_play_recs)
 -> 解析选项编码与生成时点赔率 -> 计算去水隐含概率 / EV / 凯利
 -> 落库批次 + 单场推荐(fp_strategy_ai_pick_batches / ai_picks)
--> 从高置信推荐中自动组 2-4 串候选(fp_strategy_ai_parlay_plans)。
+-> 自动组串关候选:单式 2-4 串 + 复合 5-6 场 3/4 串
+   (fp_strategy_ai_parlay_plans)。
 
 一键转换:单场推荐 -> 桥接 Recommendation + UserDecision(仿用户自选流,
 结算/复盘链路零改动);串关候选 -> parlay.save_bet_scheme 物化正式方案。
@@ -12,6 +13,7 @@
 """
 
 import datetime
+import itertools
 import logging
 import math
 import typing
@@ -50,10 +52,6 @@ MAX_CONTRARIAN_LEGS = 2
 _KELLY_PROB_MIN = 0.001
 _KELLY_PROB_MAX = 0.999
 
-# 组合置信度同样需钳制后再进凯利公式
-_KELLY_CONF_MIN = 0.001
-_KELLY_CONF_MAX = 0.999
-
 
 class BatchSummary(typing.NamedTuple):
     """一次推荐生成的批次摘要。"""
@@ -85,7 +83,8 @@ async def generate_batch(
 
     取每场最新 AI 分析的全部玩法推荐,过滤已开赛场次与无法解析
     选项编码/赔率的条目(计入 skipped_count),计算隐含概率/EV/凯利
-    后落库;随后从每场 EV 最高代表腿自动组 2-4 串候选方案。
+    后落库;随后从每场 EV 最高代表腿自动组串关候选
+    (单式 2-4 串 + 复合 5-6 场 3/4 串)。
     同售卖日旧 ACTIVE 批次置为 SUPERSEDED(历史保留)。
 
     Args:
@@ -220,18 +219,66 @@ async def generate_batch(
     return BatchSummary(batch=batch, superseded_batch_ids=superseded_ids)
 
 
+def _plan_metrics(
+    legs: list[AiPick], parlay_size: int
+) -> tuple[float, float, float, float]:
+    """按串关组合口径计算方案指标(组合赔率/置信度/EV/凯利)。
+
+    单式方案(M 场 M 串)只有唯一组合,退化为直接乘积;
+    复合方案(M 场 N 串,M > N)按全部 C(M,N) 个组合取:
+    组合赔率 = 最高单注赔率(与 BetScheme.max_odds 同口径);
+    组合置信度 = 平均单注命中概率;EV = 平均单注期望回报 − 1;
+    凯利 = 以"平均单注命中概率 × 平均单注赔率"的代表性单注近似。
+    腿间独立性均为近似口径(浅盘日让平存在相关性)。
+    """
+    combos = list(itertools.combinations(legs, parlay_size))
+    odds_prods = [
+        math.prod(float(leg.odds) for leg in combo) for combo in combos
+    ]
+    conf_prods = [
+        math.prod(float(leg.confidence) for leg in combo) for combo in combos
+    ]
+    combined_odds = max(odds_prods)
+    combined_confidence = sum(conf_prods) / len(combos)
+    ev = (
+        sum(c * o for c, o in zip(conf_prods, odds_prods)) / len(combos) - 1.0
+    )
+    mean_odds = sum(odds_prods) / len(combos)
+    kelly = poisson.kelly_fraction(
+        _clamp_kelly_prob(combined_confidence), mean_odds
+    )
+    return combined_odds, combined_confidence, ev, kelly
+
+
+def _composite_legs(
+    chalk: list[AiPick], value: list[AiPick], count: int
+) -> list[AiPick] | None:
+    """取 count 条腿组复合方案:顺向优先(置信度序),逆向补位(≤ 2 条)。
+
+    Returns:
+        腿列表;凑不齐 count 条(顺向不足且逆向补位超上限)时为 None。
+    """
+    legs = list(chalk[:count])
+    if len(legs) < count:
+        # 顺向腿无逆向标记,补位上限即 MAX_CONTRARIAN_LEGS
+        legs += value[: min(count - len(legs), MAX_CONTRARIAN_LEGS)]
+    return legs if len(legs) == count else None
+
+
 def _build_parlay_plans(
     batch_id: int,
     picks: list[AiPick],
     match_info: dict[str, tuple[str, str]],
 ) -> list[AiParlayPlan]:
-    """从单场推荐中自动组 2-4 串候选方案。
+    """从单场推荐中自动组串关候选方案(单式 2-4 串 + 复合 5-6 场)。
 
     腿池:每场仅取 EV 最高代表腿(并列取置信度高),天然满足
     "每场一玩法"串关规则;分层为顺向腿(chalk)与逆向腿(value)。
-    固定产出至多 4 个候选(腿不足的档位不硬凑):
-    稳胆 2串1 / 稳胆 3串1 / 稳胆 4串1(3 顺向 + 1 逆向)/
-    价值混合 2串1(1 顺向 + 1 逆向)。
+    单式档位(腿不足的档位不硬凑):稳胆 2串1 / 稳胆 3串1 /
+    稳胆 4串1(3 顺向 + 1 逆向)/ 价值混合 2串1(1 顺向 + 1 逆向)。
+    复合档位(M 场任取 N 场过关,C(M,N) 注,保存/结算按组合口径):
+    代表腿 ≥ 6 条时产出 复合 6场3串1(20 注)+ 复合 6场4串1(15 注),
+    恰 5 条时降级为 复合 5场3串1(10 注)。
     硬约束:逆向腿数 ≤ MAX_CONTRARIAN_LEGS(校准规则)。
     组合置信度按腿间独立近似(浅盘日让平存在相关性,见校准教训)。
     """
@@ -255,11 +302,12 @@ def _build_parlay_plans(
         reverse=True,
     )
 
-    drafts: list[tuple[str, str, list[AiPick]]] = []
+    # (方案名, 一句话说明, 腿列表, N串1 的 N)
+    drafts: list[tuple[str, str, list[AiPick], int]] = []
     if len(chalk) >= 2:
-        drafts.append(("稳胆 2串1", "置信度最高的 2 条顺向腿", chalk[:2]))
+        drafts.append(("稳胆 2串1", "置信度最高的 2 条顺向腿", chalk[:2], 2))
     if len(chalk) >= 3:
-        drafts.append(("稳胆 3串1", "置信度最高的 3 条顺向腿", chalk[:3]))
+        drafts.append(("稳胆 3串1", "置信度最高的 3 条顺向腿", chalk[:3], 3))
     if len(chalk) >= 3:
         # 3 顺向 + EV 最高的 1 条逆向;逆向不足时取第 4 条顺向
         legs = chalk[:3] + (value[:1] if value else chalk[3:4])
@@ -269,33 +317,56 @@ def _build_parlay_plans(
                 if value
                 else "置信度最高的 4 条顺向腿"
             )
-            drafts.append(("稳胆 4串1", desc, legs))
+            drafts.append(("稳胆 4串1", desc, legs, 4))
     if chalk and value:
         drafts.append(
-            ("价值混合 2串1", "最高 1 条顺向 + EV 最高 1 条逆向", chalk[:1] + value[:1])
+            (
+                "价值混合 2串1",
+                "最高 1 条顺向 + EV 最高 1 条逆向",
+                chalk[:1] + value[:1],
+                2,
+            )
         )
 
+    # 复合档位:覆盖更多场次的过关组合(每注仍是 N 串 1)
+    if len(reps) >= 6:
+        composite_specs = (
+            ("复合 6场3串1", 6, 3, "6 场任取 3 场过关(共 20 注)"),
+            ("复合 6场4串1", 6, 4, "6 场任取 4 场过关(共 15 注)"),
+        )
+    elif len(reps) == 5:
+        composite_specs = (
+            ("复合 5场3串1", 5, 3, "5 场任取 3 场过关(共 10 注)"),
+        )
+    else:
+        composite_specs = ()
+    for plan_name, leg_count, parlay_size, desc in composite_specs:
+        legs = _composite_legs(chalk, value, leg_count)
+        if legs is not None:
+            drafts.append((plan_name, desc, legs, parlay_size))
+
     plans: list[AiParlayPlan] = []
-    for plan_name, plan_desc, legs in drafts:
+    for plan_name, plan_desc, legs, parlay_size in drafts:
         contrarian_count = sum(1 for leg in legs if leg.is_contrarian)
         # 校准规则硬约束:逆向腿 ≤ 2(构建逻辑保证,此处防御性校验)
-        if contrarian_count > MAX_CONTRARIAN_LEGS or len(legs) < 2:
+        if contrarian_count > MAX_CONTRARIAN_LEGS or len(legs) < parlay_size:
             logger.warning(
-                "串关候选 %s 构建异常(逆向 %s 条/共 %s 腿),跳过",
-                plan_name, contrarian_count, len(legs),
+                "串关候选 %s 构建异常(逆向 %s 条/共 %s 腿/串关 %s),跳过",
+                plan_name, contrarian_count, len(legs), parlay_size,
             )
             continue
-        combined_odds = math.prod(float(leg.odds) for leg in legs)
-        combined_confidence = math.prod(float(leg.confidence) for leg in legs)
+        combined_odds, combined_confidence, ev, kelly = _plan_metrics(
+            legs, parlay_size
+        )
+        full_desc = f"{plan_desc};腿间独立性为近似口径(浅盘日让平存在相关性)"
+        if len(legs) > parlay_size:
+            full_desc += ";组合指标按平均单注口径"
         plans.append(
             AiParlayPlan(
                 batch_id=batch_id,
-                parlay_size=len(legs),
+                parlay_size=parlay_size,
                 plan_name=plan_name,
-                plan_desc=(
-                    f"{plan_desc};腿间独立性为近似口径"
-                    "(浅盘日让平存在相关性)"
-                ),
+                plan_desc=full_desc,
                 legs=[
                     {
                         "match_id": leg.match_id,
@@ -313,14 +384,8 @@ def _build_parlay_plans(
                 ],
                 combined_odds=combined_odds,
                 combined_confidence=combined_confidence,
-                ev=combined_confidence * combined_odds - 1.0,
-                kelly=poisson.kelly_fraction(
-                    min(
-                        max(combined_confidence, _KELLY_CONF_MIN),
-                        _KELLY_CONF_MAX,
-                    ),
-                    combined_odds,
-                ),
+                ev=ev,
+                kelly=kelly,
                 contrarian_count=contrarian_count,
             )
         )
@@ -479,7 +544,8 @@ async def convert_plan_to_scheme(
     """将串关候选方案保存为正式模拟串关方案(幂等)。
 
     候选腿经 parlay.save_bet_scheme 物化(每场一玩法/注数校验全复用),
-    BetSchemeItem 持有勾选时点的赔率快照。
+    BetSchemeItem 持有勾选时点的赔率快照。复合方案(腿数 > parlay_size)
+    由 parlay.calculate_parlay 按 C(腿数, N) 组合口径计算注数。
 
     Raises:
         ResourceNotFoundError: 方案不存在。
@@ -509,7 +575,8 @@ async def convert_plan_to_scheme(
         raise DataValidationError("该方案所属批次已被重算取代,请刷新后重新选择")
 
     legs = [leg for leg in plan.legs or [] if isinstance(leg, dict)]
-    if len(legs) != plan.parlay_size:
+    # 单式:腿数 == parlay_size;复合(M 场 N 串):腿数 > parlay_size
+    if len(legs) < plan.parlay_size:
         raise DataValidationError("候选方案腿数据异常,请重新生成推荐")
     match_ids = [str(leg["match_id"]) for leg in legs]
     pending_ids = set(

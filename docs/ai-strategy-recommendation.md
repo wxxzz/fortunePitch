@@ -5,8 +5,8 @@
 打通"深度分析页 AI 分析"与"策略页推荐"两套平行体系:按售卖日汇总各场
 **最近一次** AI 分析的分玩法推荐(`fp_match_llm_play_recs`),解析选项编码与
 生成时点赔率,计算去水隐含概率 / EV / 凯利 / 逆向标记,落库为
-**单场推荐清单** + **自动串关候选(2-4 串)**;用户可一键将推荐转为
-模拟决策/模拟串关方案,直接进入现有结算/复盘闭环。
+**单场推荐清单** + **自动串关候选(单式 2-4 串 + 复合 5-6 场 3/4 串)**;
+用户可一键将推荐转为模拟决策/模拟串关方案,直接进入现有结算/复盘闭环。
 
 - 生成方式:策略页「生成推荐」按钮**手动触发**,可反复重算
   (同售卖日旧批次自动置 SUPERSEDED,历史保留,查询只看最新 ACTIVE 批次)
@@ -18,7 +18,7 @@
 |---|---|
 | `fp_strategy_ai_pick_batches` | 批次:business_date / min_confidence / pick_count / skipped_count / plan_count / status(ACTIVE/SUPERSEDED) |
 | `fp_strategy_ai_picks` | 单场推荐:批次 FK / match_id / analysis_id(溯源)/ play_code / recommendation(LLM 原始文案)/ option_code+label+odds(生成时点快照)/ confidence / implied_prob / ev(=conf×odds−1)/ kelly / is_contrarian(=conf<implied)/ reasoning / decision_id(转决策后回填,幂等指针) |
-| `fp_strategy_ai_parlay_plans` | 串关候选:批次 FK / parlay_size(2-4)/ plan_name+desc / **legs JSON 快照** / combined_odds(Πodds)/ combined_confidence(Πconf,独立近似)/ ev / kelly / contrarian_count / scheme_id(保存后回填) |
+| `fp_strategy_ai_parlay_plans` | 串关候选:批次 FK / parlay_size(N串1 的 N;复合方案小于腿数)/ plan_name+desc / **legs JSON 快照** / combined_odds(单式=Πodds,复合=最高单注赔率)/ combined_confidence(单式=Πconf,复合=平均单注,独立近似)/ ev / kelly / contrarian_count / scheme_id(保存后回填) |
 
 > 项目无 Alembic,`create_all` 只能加表;`fp_strategy_recommendations`
 > 保留为转决策的桥接表(`UserDecision.recommend_id` 非空 FK 要求)。
@@ -31,9 +31,18 @@
 - **只落可行动推荐**:非 PENDING / 解析失败 / odds≤1 / 结算引擎无法静态映射
   编码(`settlement.resolve_option_label` 为 None)一律跳过,计入 skipped_count
 - **串关构建** `_build_parlay_plans`:每场仅取 EV 最高代表腿(EV 并列取置信度,
-  天然满足每场一玩法)→ chalk(顺向)/ value(逆向)分层 → 至多 4 档:
-  稳胆 2串1 / 稳胆 3串1 / 稳胆 4串1(3 顺向+1 逆向)/ 价值混合 2串1;
-  **硬约束逆向腿 ≤ 2**(jczq-betting-lessons 校准规则);腿不足的档位不硬凑
+  天然满足每场一玩法)→ chalk(顺向)/ value(逆向)分层。
+  单式档位至多 4 档:稳胆 2串1 / 稳胆 3串1 / 稳胆 4串1(3 顺向+1 逆向)/
+  价值混合 2串1;**硬约束逆向腿 ≤ 2**(jczq-betting-lessons 校准规则),
+  腿不足的档位不硬凑。
+  复合档位(代表腿 ≥6 条时 复合 6场3串1 + 复合 6场4串1;恰 5 条时降级
+  复合 5场3串1):M 场任取 N 场过关,注数 = C(M,N),顺向优先选腿、
+  逆向补位 ≤2;保存/结算经 parlay.calculate_parlay / settlement.
+  compute_scheme_payout 的组合口径天然支持,链路零改动
+- **复合方案指标口径** `_plan_metrics`:组合赔率 = 最高单注赔率
+  (与 BetScheme.max_odds 同口径);组合置信度 = 平均单注命中概率;
+  EV = 平均单注期望回报 − 1;凯利按"平均命中概率 × 平均赔率"的代表性
+  单注近似;单式方案(腿数=串关数)退化为唯一组合的直接乘积
 - **凯利钳制**:confidence 进 `poisson.kelly_fraction` 前钳制到 (0.001, 0.999)
 
 ## API(前缀 /api/v1/strategy)
@@ -76,25 +85,28 @@
 - `src/api/strategy/aiPick.ts`:5 个 API 封装 + 类型
 - `src/stores/strategy.ts`:aiPicks / aiPlans / aiBatch / isGenerating 状态,
   generateAi / fetchAiRecommendations 并入 fetchAll
-- `src/components/strategy/AiPickTable.vue`:工具条(**售卖日筛选** + 置信度阈值下拉 +
-  生成按钮 + 批次摘要)+ 推荐表(含 EV 着色/逆向标记/行内注额转决策,已转行置灰);
-  售卖日与串关候选区共享筛选状态(缺省当天,切换即按该日生效批次重拉,
+- `src/components/strategy/AiPickTable.vue`:工具条(**售卖日筛选** + 置信度阈值下拉
+  (30%~70%)+ 生成按钮 + 批次摘要)+ 推荐表(含 EV 着色/逆向标记/行内注额转决策,
+  已转行置灰);售卖日与串关候选区共享筛选状态(缺省当天,切换即按该日生效批次重拉,
   清空取最近生效批次)
-- `src/components/strategy/AiParlayPlanCard.vue`:候选方案卡片(逐腿 +
-  组合指标 + 保存为模拟方案),含独立性近似与合规脚注
+- `src/components/strategy/AiParlayPlanCard.vue`:候选方案卡片(单式 2-4 串 +
+  复合 5-6 场 3/4 串;逐腿 + 组合指标 + 注数/预计总投入 + 保存为模拟方案),
+  含独立性近似与合规脚注
 - `StrategyView.vue`:AI 推荐区替换为上述两子组件,其余三区不动
 - `FocusRecommendCard.vue`:数据源优先 aiPicks(置信度前 3,含赔率快照),
   空时回退现有 recommendations;strategyLabel 补 TOTAL_GOALS/HALF_FULL
 
 ## 测试
 
-- `tests/test_recommendation_engine.py`(17 项):resolve 匹配层、generate_batch
+- `tests/test_recommendation_engine.py`(21 项):resolve 匹配层、generate_batch
   (最新分析生效/阈值过滤/skipped 计数/EV 数值/重算 SUPERSEDED 幂等)、
-  串关构建(每场一腿/腿不足跳档/组合乘积)、convert 幂等与 422/404
+  串关构建(每场一腿/腿不足跳档/组合乘积/复合档位 6场3串与6场4串、
+  5 场降级/逆向补位上限)、convert 幂等与 422/404、
+  复合方案转换(C(6,3)=20 注/总投入口径)
 - `tests/test_ai_picks_api.py`(12 项):generate 200/422/默认日期、GET 清单、
   convert 幂等/404、**闭环集成**(生成→转换→结算→复盘统计,
   断言 SP 优先结算盈亏与 KPI 纳入 AI 来源记录)
-- 基线:452 passed(423 存量 + 29 新增)
+- 基线:456 passed(423 存量 + 33 新增)
 
 ## 边界与已知近似
 

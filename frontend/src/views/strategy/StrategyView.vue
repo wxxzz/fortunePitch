@@ -1,47 +1,20 @@
 <script setup lang="ts">
 /**
- * 策略与赔率模块视图:赔率走势 / AI 策略推荐(单场清单 + 自动串关)/ 模拟决策复盘 / 凯利指数。
+ * 策略与赔率模块视图:AI 策略推荐(单场清单 + 自动串关)/ 模拟决策复盘 / 凯利指数。
  */
-import { computed, onMounted, ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useStrategyStore } from '@/stores/strategy'
-import OddsTrendChart, {
-  type OddsTrendPoint,
-} from '@/components/strategy/OddsTrendChart.vue'
 import AiPickTable from '@/components/strategy/AiPickTable.vue'
 import AiParlayPlanCard from '@/components/strategy/AiParlayPlanCard.vue'
 
 const strategyStore = useStrategyStore()
-const { oddsHistory, decisions, kellyResult, isLoading, error } =
+const { decisions, kellyResult, isLoading, error } =
   storeToRefs(strategyStore)
 
 onMounted(() => {
   void strategyStore.fetchAll()
 })
-
-/** 欧赔走势:后端赔率快照为单值(初盘/即时),尚无分项赔率,
- * 无真实分项数据时展示演示走势 */
-const EURO_ODDS_SERIES_NAMES = ['主胜', '平局', '客胜'] as const
-
-const euroOddsTrend = computed<OddsTrendPoint[]>(() => {
-  const euroRecords = oddsHistory.value.filter((o) => o.market_type === 'EURO_ODDS')
-  if (euroRecords.length === 0) {
-    return [
-      { time: 'T-5d', values: [2.1, 3.4, 3.2] },
-      { time: 'T-3d', values: [2.0, 3.45, 3.35] },
-      { time: 'T-1d', values: [1.92, 3.5, 3.6] },
-      { time: '即时', values: [1.88, 3.55, 3.7] },
-    ]
-  }
-  return euroRecords.map((o) => ({
-    time: new Date(o.update_time).toLocaleDateString(),
-    values: [o.initial_value, o.current_value, o.initial_value],
-  }))
-})
-
-const hasRealOddsData = computed(
-  () => oddsHistory.value.filter((o) => o.market_type === 'EURO_ODDS').length > 0,
-)
 
 // 凯利计算表单(本地状态)
 const modelProb = ref<number>(0.55)
@@ -64,14 +37,6 @@ const statusLabel: Record<string, string> = {
 
     <p v-if="error" class="strategy-view__error" role="alert">{{ error }}</p>
     <p v-if="isLoading" class="strategy-view__hint">加载中…</p>
-
-    <h3 class="strategy-view__section-title">欧赔走势</h3>
-    <OddsTrendChart
-      v-if="euroOddsTrend.length > 0"
-      :series-names="[...EURO_ODDS_SERIES_NAMES]"
-      :points="euroOddsTrend"
-    />
-    <p v-if="!hasRealOddsData" class="strategy-view__hint">演示数据 · 分项欧赔数据源接入后展示真实走势</p>
 
     <h3 class="strategy-view__section-title">AI 策略推荐(单场清单,可转模拟决策)</h3>
     <AiPickTable />

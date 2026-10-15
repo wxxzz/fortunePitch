@@ -33,6 +33,11 @@ const router = createRouter({
       component: () => import('@/views/match/MatchResultsView.vue'),
     },
     {
+      path: '/leagues/:leagueId?',
+      name: 'league-dashboard',
+      component: () => import('@/views/league/LeagueDashboardView.vue'),
+    },
+    {
       path: '/match/:matchId',
       name: 'match-detail',
       component: () => import('@/views/match/MatchDetailView.vue'),

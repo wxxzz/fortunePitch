@@ -195,6 +195,56 @@ class TeamDashboardRead(BaseModel):
     statistics: DashboardStatisticsRead = Field(description="近期战绩统计")
 
 
+# ---------- 联赛看板 ----------
+
+
+class LeagueStandingRowRead(BaseModel):
+    """联赛积分榜行(总榜;基本面未同步时战绩字段为空)。"""
+
+    team_id: int
+    team_name: str
+    season: str | None = Field(default=None, description="基本面数据所属赛季")
+    ranking: int | None = Field(default=None, description="总榜排名")
+    played: int | None = Field(default=None, description="已赛场次")
+    wins: int | None = Field(default=None)
+    draws: int | None = Field(default=None)
+    losses: int | None = Field(default=None)
+    goals_for: int | None = Field(default=None, description="总进球")
+    goals_against: int | None = Field(default=None, description="总失球")
+    goal_diff: int | None = Field(default=None, description="净胜球")
+    points: int | None = Field(default=None, description="积分")
+    win_rate: float | None = Field(default=None, description="胜率(%)")
+
+
+class LeagueMatchRowRead(BaseModel):
+    """联赛赛程/赛果行(含主客队名与完赛比分)。"""
+
+    match_id: str
+    match_num_str: str
+    match_time: datetime.datetime
+    match_status: str = Field(description="PENDING=未开赛 / LIVE=进行中 / FINISHED=已完赛")
+    home_team_name: str
+    away_team_name: str
+    home_score: int | None = Field(default=None, description="主队进球(未完赛为空)")
+    away_score: int | None = Field(default=None, description="客队进球(未完赛为空)")
+
+
+class LeagueDashboardRead(BaseModel):
+    """联赛看板聚合响应:基本信息 + 积分榜 + 近期赛程赛果。"""
+
+    league: LeagueRead
+    team_count: int = Field(description="已入库球队数")
+    standings: list[LeagueStandingRowRead] = Field(
+        description="积分榜(总榜,按排名升序,未同步基本面球队排末尾)"
+    )
+    recent_results: list[LeagueMatchRowRead] = Field(
+        description="近期赛果(已完赛,开赛时间倒序)"
+    )
+    upcoming_fixtures: list[LeagueMatchRowRead] = Field(
+        description="近期赛程(未完赛,开赛时间正序)"
+    )
+
+
 # ---------- 大模型球队维度分析 ----------
 
 

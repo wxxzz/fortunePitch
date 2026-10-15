@@ -5,13 +5,17 @@
   不可解析条目计入 skipped、EV/隐含概率/凯利/逆向标记数值断言、
   重算 SUPERSEDED 幂等(旧批次历史保留,查询只看 ACTIVE);
 - _build_parlay_plans:每场仅取一条代表腿、组合乘积口径、
-  腿不足的档位不硬凑、逆向腿数硬约束;
+  腿不足的档位不硬凑、逆向腿数硬约束、
+  复合档位(6 场 3/4 串、5 场 3 串)的平均单注指标口径;
 - convert_pick_to_decision:桥接 Recommendation 落库口径、幂等、
   批次失效/比赛开赛 422、不存在 404;
-- convert_plan_to_scheme:经 save_bet_scheme 物化、幂等、批次失效 422。
+- convert_plan_to_scheme:经 save_bet_scheme 物化、幂等、批次失效 422、
+  复合方案按 C(腿数, N) 组合口径计算注数。
 """
 
 import datetime
+import itertools
+import math
 import typing
 
 import pytest
@@ -96,6 +100,63 @@ def _had_pool(odds: list[float]) -> list[dict]:
             ],
         }
     ]
+
+
+async def _seed_pending_matches(
+    factory: async_sessionmaker, count: int
+) -> None:
+    """预置 count 场 PENDING 比赛(在售 HAD 2.0/4.0/4.0),各挂主胜分析。
+
+    供复合串关档位(需 ≥5 场代表腿)的数据库级测试使用。
+    """
+    async with factory() as session:
+        league = League(
+            league_name="意大利甲级联赛", country="意大利", tier=1, season="2026-2027"
+        )
+        session.add(league)
+        await session.flush()
+        home = Team(team_name="国际米兰", league_id=league.league_id)
+        away = Team(team_name="AC米兰", league_id=league.league_id)
+        session.add_all([home, away])
+        await session.flush()
+        for idx in range(count):
+            session.add(
+                MatchGame(
+                    match_id=f"c-{idx + 1}",
+                    match_num_str=f"周六{idx + 1:03d}",
+                    league_id=league.league_id,
+                    home_team_id=home.team_id,
+                    away_team_id=away.team_id,
+                    match_time=datetime.datetime(2026, 9, 17, 21, 0),
+                    business_date=BATCH_DATE,
+                    match_status="PENDING",
+                )
+            )
+        await session.flush()
+        for idx in range(count):
+            session.add(
+                MatchOdds(
+                    match_id=f"c-{idx + 1}",
+                    pools=_had_pool([2.0, 4.0, 4.0]),
+                    update_time=datetime.datetime(2026, 9, 16, 10, 0),
+                )
+            )
+        await session.flush()
+        for idx in range(count):
+            await _add_analysis(
+                session,
+                f"c-{idx + 1}",
+                [
+                    {
+                        "code": "HAD",
+                        "name": "胜平负",
+                        "recommendation": "主胜",
+                        "confidence": 0.80,
+                        "reasoning": "复合串关测试",
+                    }
+                ],
+            )
+        await session.commit()
 
 
 async def _seed(factory: async_sessionmaker) -> None:
@@ -510,6 +571,104 @@ class TestParlayPlanBuilding:
         # Assert
         assert plans == []
 
+    @staticmethod
+    def _six_chalk_picks() -> list[AiPick]:
+        """六场顺向代表腿(置信度/赔率各异,供复合档位指标断言)。"""
+        specs = (
+            ("m-1", 2.0, 0.80),
+            ("m-2", 1.8, 0.70),
+            ("m-3", 2.5, 0.60),
+            ("m-4", 1.5, 0.75),
+            ("m-5", 3.0, 0.55),
+            ("m-6", 2.2, 0.65),
+        )
+        return [
+            _make_pick(match_id, odds=odds, confidence=conf)
+            for match_id, odds, conf in specs
+        ]
+
+    def test_composite_six_matches_plans_with_average_metrics(self) -> None:
+        # Arrange:6 场顺向代表腿 -> 追加 复合 6场3串1 / 复合 6场4串1
+        picks = self._six_chalk_picks()
+        match_info = {f"m-{i}": (f"周六{i:03d}", f"主{i} vs 客{i}") for i in range(1, 7)}
+
+        # Act
+        plans = recommendation_engine._build_parlay_plans(1, picks, match_info)
+
+        # Assert:3 个单式档 + 2 个复合档
+        by_name = {p.plan_name: p for p in plans}
+        assert set(by_name) == {
+            "稳胆 2串1", "稳胆 3串1", "稳胆 4串1",
+            "复合 6场3串1", "复合 6场4串1",
+        }
+
+        comp3 = by_name["复合 6场3串1"]
+        assert comp3.parlay_size == 3
+        assert len(comp3.legs) == 6
+        assert comp3.contrarian_count == 0
+        # 指标口径:组合赔率 = 最高单注赔率;置信度/EV = 平均单注
+        combo_odds = [
+            math.prod(leg["odds"] for leg in combo)
+            for combo in itertools.combinations(comp3.legs, 3)
+        ]
+        combo_conf = [
+            math.prod(leg["confidence"] for leg in combo)
+            for combo in itertools.combinations(comp3.legs, 3)
+        ]
+        assert len(combo_odds) == 20  # C(6,3)
+        assert float(comp3.combined_odds) == pytest.approx(max(combo_odds))
+        assert float(comp3.combined_confidence) == pytest.approx(
+            sum(combo_conf) / len(combo_conf), abs=1e-4
+        )
+        assert float(comp3.ev) == pytest.approx(
+            sum(c * o for c, o in zip(combo_conf, combo_odds)) / len(combo_odds) - 1.0,
+            abs=1e-4,
+        )
+
+        comp4 = by_name["复合 6场4串1"]
+        assert comp4.parlay_size == 4
+        assert len(comp4.legs) == 6
+        # 说明文案带平均单注口径标注
+        assert "平均单注" in comp4.plan_desc
+
+    def test_composite_five_matches_degrades_to_3leg(self) -> None:
+        # Arrange:恰 5 场代表腿 -> 复合档降级为 5场3串1(C(5,3)=10 注)
+        picks = self._six_chalk_picks()[:5]
+        match_info = {f"m-{i}": (f"周六{i:03d}", f"主{i} vs 客{i}") for i in range(1, 6)}
+
+        # Act
+        plans = recommendation_engine._build_parlay_plans(1, picks, match_info)
+
+        # Assert:复合档只有 5场3串1,无 6 场档
+        by_name = {p.plan_name: p for p in plans}
+        assert "复合 5场3串1" in by_name
+        assert not any(name.startswith("复合 6场") for name in by_name)
+        comp = by_name["复合 5场3串1"]
+        assert comp.parlay_size == 3
+        assert len(comp.legs) == 5
+
+    def test_composite_legs_fill_value_capped_at_two(self) -> None:
+        # Arrange:4 顺向 + 3 逆向 -> 复合 6 场档补 2 条逆向(硬上限)
+        picks = self._six_chalk_picks()[:4] + [
+            _make_pick("v-1", confidence=0.45, implied=0.6, is_contrarian=True),
+            _make_pick("v-2", confidence=0.40, implied=0.6, is_contrarian=True),
+            _make_pick("v-3", confidence=0.35, implied=0.6, is_contrarian=True),
+        ]
+        match_info = {
+            **{f"m-{i}": (f"周六{i:03d}", f"主{i} vs 客{i}") for i in range(1, 5)},
+            **{f"v-{i}": (f"周日{i:03d}", f"主{i} vs 客{i}") for i in range(1, 4)},
+        }
+
+        # Act
+        plans = recommendation_engine._build_parlay_plans(1, picks, match_info)
+
+        # Assert:逆向补位恰 2 条(第 3 条逆向不进方案)
+        by_name = {p.plan_name: p for p in plans}
+        comp3 = by_name["复合 6场3串1"]
+        assert len(comp3.legs) == 6
+        assert comp3.contrarian_count == 2
+        assert all(p.contrarian_count <= 2 for p in plans)
+
 
 class TestConvertPickToDecision:
     """recommendation_engine.convert_pick_to_decision"""
@@ -708,6 +867,37 @@ class TestConvertPlanToScheme:
         assert float(scheme.stake_per_bet) == pytest.approx(100)
         assert {item.match_id for item in scheme.items} == {"m-1", "m-2"}
         assert all(item.pool_code == "HAD" for item in scheme.items)
+        async with session_factory() as session:
+            plan = await session.get(AiParlayPlan, plan_id)
+            assert plan is not None and plan.scheme_id == scheme.scheme_id
+
+    async def test_convert_composite_plan_counts_combination_bets(
+        self, session_factory: async_sessionmaker
+    ) -> None:
+        # Arrange:6 场代表腿 -> 复合 6场3串1 候选
+        await _seed_pending_matches(session_factory, 6)
+        async with session_factory() as session:
+            await recommendation_engine.generate_batch(
+                session, business_date=BATCH_DATE
+            )
+            await session.commit()
+        plan_id = await self._plan_id_by_name(
+            session_factory, "复合 6场3串1"
+        )
+
+        # Act
+        async with session_factory() as session:
+            scheme, created = await recommendation_engine.convert_plan_to_scheme(
+                session, plan_id=plan_id, user_id=1, stake_per_bet=100
+            )
+            await session.commit()
+
+        # Assert:6 场 3 串 -> C(6,3)=20 注,总投入 20 x 100
+        assert created is True
+        assert scheme.parlay_size == 3
+        assert scheme.bet_count == 20
+        assert len(scheme.items) == 6
+        assert float(scheme.total_stake) == pytest.approx(2000)
         async with session_factory() as session:
             plan = await session.get(AiParlayPlan, plan_id)
             assert plan is not None and plan.scheme_id == scheme.scheme_id

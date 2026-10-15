@@ -9,7 +9,10 @@ from app.api.v1.base.schemas import (
     DashboardLeagueRead,
     DashboardStatisticsRead,
     LeagueCreate,
+    LeagueDashboardRead,
+    LeagueMatchRowRead,
     LeagueRead,
+    LeagueStandingRowRead,
     PlayerCreate,
     PlayerRead,
     TeamCreate,
@@ -24,7 +27,7 @@ from app.core.database import get_db_session
 from app.core.exceptions import ResourceNotFoundError
 from app.core.security import verify_api_key
 from app.models import League, Player, Team, TeamFundamentals, TeamLlmAnalysis
-from app.services import crud, llm_team, team_dashboard
+from app.services import crud, league_dashboard, llm_team, team_dashboard
 
 router = APIRouter(prefix="/base", tags=["base"], dependencies=[Depends(verify_api_key)])
 
@@ -63,6 +66,83 @@ async def delete_league(
 ) -> None:
     """删除联赛。"""
     await crud.delete_entity(session, League, league_id)
+
+
+@router.get("/leagues/{league_id}/dashboard", response_model=LeagueDashboardRead)
+async def get_league_dashboard(
+    league_id: int,
+    result_limit: int = Query(default=10, ge=1, le=50, description="近期赛果条数"),
+    fixture_limit: int = Query(default=10, ge=1, le=50, description="近期赛程条数"),
+    session: AsyncSession = Depends(get_db_session),
+) -> LeagueDashboardRead:
+    """查询联赛看板:基本信息、球队数、积分榜(总榜)与近期赛程赛果。
+
+    积分榜来自球队基本面(数据采集页"同步基本面"写入,未同步的球队
+    排末尾);赛程赛果来自竞彩比赛档案,可按 match_id 进入比赛详情。
+
+    Raises:
+        ResourceNotFoundError: 联赛不存在。
+    """
+    data = await league_dashboard.get_league_dashboard(
+        session,
+        league_id,
+        result_limit=result_limit,
+        fixture_limit=fixture_limit,
+    )
+    return LeagueDashboardRead(
+        league=LeagueRead.model_validate(data.league),
+        team_count=data.team_count,
+        standings=[
+            LeagueStandingRowRead(
+                team_id=row.team_id,
+                team_name=row.team_name,
+                **(
+                    dict(
+                        season=row.fundamentals.season,
+                        ranking=row.fundamentals.ranking,
+                        played=row.fundamentals.played,
+                        wins=row.fundamentals.wins,
+                        draws=row.fundamentals.draws,
+                        losses=row.fundamentals.losses,
+                        goals_for=row.fundamentals.goals_for,
+                        goals_against=row.fundamentals.goals_against,
+                        goal_diff=row.fundamentals.goal_diff,
+                        points=row.fundamentals.points,
+                        win_rate=row.fundamentals.win_rate,
+                    )
+                    if row.fundamentals is not None
+                    else {}
+                ),
+            )
+            for row in data.standings
+        ],
+        recent_results=[
+            LeagueMatchRowRead(
+                match_id=row.match_id,
+                match_num_str=row.match_num_str,
+                match_time=row.match_time,
+                match_status=row.match_status,
+                home_team_name=row.home_team_name,
+                away_team_name=row.away_team_name,
+                home_score=row.home_score,
+                away_score=row.away_score,
+            )
+            for row in data.recent_results
+        ],
+        upcoming_fixtures=[
+            LeagueMatchRowRead(
+                match_id=row.match_id,
+                match_num_str=row.match_num_str,
+                match_time=row.match_time,
+                match_status=row.match_status,
+                home_team_name=row.home_team_name,
+                away_team_name=row.away_team_name,
+                home_score=row.home_score,
+                away_score=row.away_score,
+            )
+            for row in data.upcoming_fixtures
+        ],
+    )
 
 
 # ---------- 球队 /teams ----------

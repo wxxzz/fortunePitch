@@ -1,5 +1,5 @@
 /**
- * 策略与赔率模块 Store:赔率历史 / 策略推荐 / AI 推荐 / 用户决策 / 凯利指数。
+ * 策略模块 Store:策略推荐 / AI 推荐 / 用户决策 / 凯利指数。
  */
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
@@ -11,10 +11,6 @@ function todayDateStr(): string {
   const day = String(now.getDate()).padStart(2, '0')
   return `${now.getFullYear()}-${month}-${day}`
 }
-import {
-  listOddsHistory,
-  type OddsHistory,
-} from '@/api/strategy/oddsHistory'
 import {
   listRecommendations,
   type Recommendation,
@@ -34,7 +30,6 @@ import {
 } from '@/api/strategy/aiPick'
 
 export const useStrategyStore = defineStore('strategy', () => {
-  const oddsHistory = ref<OddsHistory[]>([])
   const recommendations = ref<Recommendation[]>([])
   const decisions = ref<UserDecision[]>([])
   const kellyResult = ref<KellyResponse | null>(null)
@@ -64,13 +59,11 @@ export const useStrategyStore = defineStore('strategy', () => {
     isLoading.value = true
     error.value = null
     try {
-      const [odds, recs, decs] = await Promise.all([
-        listOddsHistory({ limit: 100 }),
+      const [recs, decs] = await Promise.all([
         listRecommendations({ limit: 50 }),
         listUserDecisions({ limit: 50 }),
         fetchAiRecommendations(),
       ])
-      oddsHistory.value = odds
       recommendations.value = recs
       decisions.value = decs
     } catch (err) {
@@ -110,7 +103,6 @@ export const useStrategyStore = defineStore('strategy', () => {
   }
 
   return {
-    oddsHistory,
     recommendations,
     decisions,
     kellyResult,
