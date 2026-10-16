@@ -26,6 +26,7 @@ const ANALYSIS_TYPE_LABELS: Record<string, string> = {
   analysis: 'AI 综合分析',
   fundamental: 'AI 基本面分析',
   odds_trend: 'AI 赔率走势分析',
+  retrospect: 'AI 赛事复盘',
   team: '球队维度分析',
 }
 

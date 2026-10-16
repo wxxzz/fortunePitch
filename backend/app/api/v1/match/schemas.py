@@ -265,6 +265,85 @@ class LlmTrendAnalysisRead(BaseModel):
     created_at: datetime.datetime = Field(description="生成时间")
 
 
+# ---------- 大模型赛事复盘 ----------
+
+
+class LlmRetrospectItemRead(BaseModel):
+    """复盘比对明细响应模型(每玩法一行,生成时点快照)。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    play_code: str = Field(description="玩法编码:HAD/HHAD/CRS/TTG/HAFU")
+    play_name: str = Field(description="玩法展示名,如 胜平负")
+    recommendation: str = Field(description="AI 推荐选项(生成复盘时的快照)")
+    confidence: float = Field(ge=0.0, le=1.0, description="当时置信度")
+    alternatives: list[str] = Field(default_factory=list, description="次选选项(快照)")
+    result: str | None = Field(
+        default=None, description="该玩法的官方开奖结果(快照;未开奖为 None)"
+    )
+    is_hit: bool | None = Field(
+        default=None, description="推荐与开奖的比对结论(命中 True/未中 False,未开奖为 None)"
+    )
+    reasoning: str = Field(description="AI 当时的推荐理由(快照)")
+    review: str | None = Field(
+        default=None, description="大模型事后归因(命中/未中的原因);模型未覆盖为 None"
+    )
+
+
+class LlmRetrospectRead(BaseModel):
+    """大模型赛事复盘结果响应模型(总结 + 逐玩法归因明细 + 经验教训)。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    retrospect_id: int = Field(description="复盘记录 ID(落库主键)")
+    match_id: str
+    analysis_id: int = Field(description="被复盘的 AI 综合分析记录 ID")
+    provider: str = Field(description="服务商:qwen / ark")
+    model: str = Field(description="实际使用的模型名")
+    summary: str = Field(description="复盘总结")
+    lessons: list[str] = Field(default_factory=list, description="经验教训(1~5条)")
+    hit_count: int = Field(description="命中玩法数(未开奖玩法不计入)")
+    total_count: int = Field(description="可比对玩法数(已开奖玩法数)")
+    items: list[LlmRetrospectItemRead] = Field(
+        default_factory=list, description="逐玩法比对明细(快照)"
+    )
+    created_at: datetime.datetime = Field(description="生成时间")
+
+
+class LlmRetrospectComparisonItemRead(BaseModel):
+    """复盘比对预览行响应模型(最近一次 AI 推荐 vs 官方开奖,系统实时计算)。"""
+
+    play_code: str = Field(description="玩法编码:HAD/HHAD/CRS/TTG/HAFU")
+    play_name: str = Field(description="玩法展示名,如 胜平负")
+    recommendation: str = Field(description="AI 推荐选项")
+    confidence: float = Field(ge=0.0, le=1.0, description="置信度")
+    alternatives: list[str] = Field(default_factory=list, description="次选选项")
+    result: str | None = Field(
+        default=None, description="该玩法的官方开奖结果(未同步赛果为 None)"
+    )
+    is_hit: bool | None = Field(
+        default=None, description="推荐与开奖的比对结论(命中 True/未中 False,未开奖为 None)"
+    )
+    reasoning: str = Field(description="AI 当时的推荐理由")
+
+
+class LlmRetrospectViewRead(BaseModel):
+    """赛事复盘 Tab 视图响应模型(比对预览 + 最近一次已保存复盘)。"""
+
+    match_id: str
+    # 赛果是否已同步且已有任一玩法开奖
+    result_available: bool = Field(description="赛果是否已同步且有开奖数据")
+    # 是否生成过 AI 综合分析(复盘对象)
+    analysis_available: bool = Field(description="是否已生成 AI 综合分析")
+    comparison: list[LlmRetrospectComparisonItemRead] = Field(
+        default_factory=list,
+        description="最近一次 AI 综合分析与官方开奖的逐玩法比对(任一缺失时为空)",
+    )
+    retrospect: LlmRetrospectRead | None = Field(
+        default=None, description="最近一次已保存的复盘;未生成过为 None"
+    )
+
+
 # ---------- AI 分析结果查询 ----------
 
 class LlmRecommendationRowRead(BaseModel):

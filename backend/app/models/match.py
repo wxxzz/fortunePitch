@@ -400,3 +400,84 @@ class MatchLlmFundDim(Base):
     analysis: Mapped["MatchLlmFundAnalysis"] = relationship(
         back_populates="dimensions"
     )
+
+
+class MatchLlmRetrospect(Base):
+    """大模型赛事复盘结果表(fp_match_llm_retrospects):每次生成一行,保留历史。
+
+    由深度分析页"赛事复盘"Tab 生成后落库:先比对最近一次 AI 综合分析的
+    分玩法推荐与官方开奖结果,再把比对结论交给大模型复盘,保存整体总结
+    与经验教训;逐玩法比对明细(推荐/开奖/命中/事后归因快照)另由
+    fp_match_llm_retrospect_items 承载。
+    """
+
+    __tablename__ = "fp_match_llm_retrospects"
+
+    retrospect_id: Mapped[int] = mapped_column(
+        BigIntPK, primary_key=True, autoincrement=True
+    )
+    match_id: Mapped[str] = mapped_column(
+        ForeignKey("fp_match_games.match_id"), index=True, nullable=False
+    )
+    # 被复盘的那次综合分析(一场可生成多次分析,复盘绑定具体一次以便溯源)
+    analysis_id: Mapped[int] = mapped_column(
+        ForeignKey("fp_match_llm_analyses.analysis_id"), nullable=False
+    )
+    provider: Mapped[str] = mapped_column(String(16), nullable=False)
+    model: Mapped[str] = mapped_column(String(64), nullable=False)
+    # 复盘总结(整体命中情况与分析偏差的核心原因)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    # 经验教训(1~5 条,指向可改进的分析方法)
+    lessons: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    # 命中数与可比对玩法数(未开奖玩法不计入)
+    hit_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=datetime.datetime.now
+    )
+
+    game: Mapped["MatchGame"] = relationship()
+    # 级联删除:主表删除时明细随数据库外键 ON DELETE CASCADE 一并清除
+    items: Mapped[list["MatchLlmRetrospectItem"]] = relationship(
+        back_populates="retrospect", cascade="all, delete-orphan", passive_deletes=True
+    )
+
+
+class MatchLlmRetrospectItem(Base):
+    """赛事复盘比对明细表(fp_match_llm_retrospect_items):每玩法一行,快照式。
+
+    (retrospect_id, play_code) 唯一;推荐/置信度/理由取自被复盘分析的
+    当时值,开奖结果取自生成复盘时的官方赛果,全部快照保存 —— 即使
+    后续重新生成分析或重录赛果,历史复盘仍完整自洽。
+    """
+
+    __tablename__ = "fp_match_llm_retrospect_items"
+    __table_args__ = (
+        UniqueConstraint("retrospect_id", "play_code", name="uk_llm_retrospect_play"),
+    )
+
+    item_id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
+    retrospect_id: Mapped[int] = mapped_column(
+        ForeignKey("fp_match_llm_retrospects.retrospect_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # 玩法编码 HAD/HHAD/CRS/TTG/HAFU 与展示名
+    play_code: Mapped[str] = mapped_column(String(8), nullable=False)
+    play_name: Mapped[str] = mapped_column(String(16), nullable=False)
+    # AI 推荐选项展示名与当时置信度(快照)
+    recommendation: Mapped[str] = mapped_column(String(32), nullable=False)
+    confidence: Mapped[float] = mapped_column(Numeric(4, 3), nullable=False)
+    alternatives: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    # 该玩法的官方开奖结果(快照;未开奖/未开售为 None)
+    result: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # 推荐与开奖的比对结论(未开奖为 None)
+    is_hit: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    # AI 当时的推荐理由(快照,复盘自包含)
+    reasoning: Mapped[str] = mapped_column(String(500), nullable=False)
+    # 大模型事后归因(命中/未中的原因,60 字以内;模型未覆盖时为 None)
+    review: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+    retrospect: Mapped["MatchLlmRetrospect"] = relationship(
+        back_populates="items"
+    )

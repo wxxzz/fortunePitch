@@ -1,8 +1,8 @@
 <script setup lang="ts">
 /**
  * 页面B:赛事深度分析(Match Detail)- 详情页。
- * 顶部对战卡片 + Tab 导航(基本面|历史交锋|高阶数据|赔率走势|策略推荐|其他信息|AI 分析)
- * + 内容区(结论卡片 / SHAP 归因 / 风险提示 / 人工录入补充信息)。
+ * 顶部对战卡片 + Tab 导航(基本面|历史交锋|高阶数据|赔率走势|策略推荐|其他信息|AI 分析|赛事复盘)
+ * + 内容区(结论卡片 / SHAP 归因 / 风险提示 / 人工录入补充信息 / 大模型复盘)。
  */
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -37,6 +37,7 @@ import ShapAttributionChart, {
 } from '@/components/analytics/ShapAttributionChart.vue'
 import OddsTrendChart from '@/components/strategy/OddsTrendChart.vue'
 import LlmLogViewer from '@/components/match/LlmLogViewer.vue'
+import MatchRetrospectPanel from '@/components/match/MatchRetrospectPanel.vue'
 import SkeletonBlock from '@/components/common/SkeletonBlock.vue'
 
 const route = useRoute()
@@ -186,7 +187,7 @@ const teamName = (teamId: number): string =>
 
 // ---------- Tab 导航 ----------
 
-const TABS = ['基本面', '历史交锋', '高阶数据', '赔率走势', '策略推荐', '其他信息', 'AI 分析'] as const
+const TABS = ['基本面', '历史交锋', '高阶数据', '赔率走势', '策略推荐', '其他信息', 'AI 分析', '赛事复盘'] as const
 const activeTab = ref<(typeof TABS)[number]>('策略推荐')
 
 // ---------- 高阶数据 / 历史交锋 Tab 数据(懒加载,payload 两 Tab 共享) ----------
@@ -1281,6 +1282,11 @@ async function handleSaveExtraInfo(): Promise<void> {
 
           <!-- 分析日志:查看每次大模型调用的请求参数与响应结果 -->
           <LlmLogViewer ref="llmLogViewer" :match-id="matchId" />
+        </div>
+
+        <!-- 赛事复盘:比对 AI 推荐与开奖结果,大模型归因并输出经验教训 -->
+        <div v-else-if="activeTab === '赛事复盘'" class="match-detail__panel">
+          <MatchRetrospectPanel :match-id="matchId" />
         </div>
       </div>
     </template>

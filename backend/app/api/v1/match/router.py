@@ -11,6 +11,9 @@ from app.api.v1.match.schemas import (
     LlmAnalysisRead,
     LlmFundamentalAnalysisRead,
     LlmRecommendationRowRead,
+    LlmRetrospectComparisonItemRead,
+    LlmRetrospectRead,
+    LlmRetrospectViewRead,
     LlmTrendAnalysisRead,
     MatchEventCreate,
     MatchExtraInfoRead,
@@ -43,6 +46,7 @@ from app.services import (
     llm_fundamental,
     llm_odds_trend,
     llm_query,
+    llm_retrospect,
     match_extra_info,
 )
 
@@ -528,6 +532,89 @@ async def list_llm_odds_trends(
         LlmTrendAnalysisRead.model_validate(row)
         for row in await llm_odds_trend.list_trend_analyses(session, match_id)
     ]
+
+
+# ---------- 大模型赛事复盘 /llm-retrospect ----------
+
+
+@router.get(
+    "/games/{match_id}/llm-retrospect",
+    response_model=LlmRetrospectViewRead,
+    summary="查询赛事复盘视图(比对预览 + 最近一次已保存复盘)",
+)
+async def get_llm_retrospect_view(
+    match_id: str, session: AsyncSession = Depends(get_db_session)
+) -> LlmRetrospectViewRead:
+    """查询比赛的赛事复盘 Tab 视图数据。
+
+    比对预览(comparison)为系统实时计算:最近一次 AI 综合分析的
+    分玩法推荐与官方开奖的逐玩法比对(命中口径与 AI 分析结果查询页
+    一致);赛果未同步或未生成分析时为空列表,由 result_available /
+    analysis_available 标记缺失原因。retrospect 为最近一次已保存的
+    复盘结果(含逐玩法比对明细快照与经验教训),未生成过为 null。
+    复盘仅供改进分析方法参考,不构成投注建议。
+
+    Raises:
+        ResourceNotFoundError: 比赛不存在。
+    """
+    game, result, analysis, comparison = await llm_retrospect.load_retrospect_view(
+        session, match_id
+    )
+    retrospect = await llm_retrospect.get_latest_retrospect(session, match_id)
+    return LlmRetrospectViewRead(
+        match_id=game.match_id,
+        result_available=result is not None
+        and llm_retrospect.has_drawn_result(result),
+        analysis_available=analysis is not None,
+        comparison=[
+            LlmRetrospectComparisonItemRead(
+                play_code=item.play_code,
+                play_name=item.play_name,
+                recommendation=item.recommendation,
+                confidence=item.confidence,
+                alternatives=list(item.alternatives),
+                result=item.result,
+                is_hit=item.is_hit,
+                reasoning=item.reasoning,
+            )
+            for item in comparison
+        ],
+        retrospect=(
+            LlmRetrospectRead.model_validate(retrospect) if retrospect else None
+        ),
+    )
+
+
+@router.post(
+    "/games/{match_id}/llm-retrospect",
+    response_model=LlmRetrospectRead,
+    summary="大模型赛事复盘(对比赛果与 AI 分析,生成后保存)",
+)
+async def generate_llm_retrospect(
+    match_id: str, session: AsyncSession = Depends(get_db_session)
+) -> LlmRetrospectRead:
+    """对比赛事结果与 AI 分析结果,调用大模型生成复盘总结并落库。
+
+    流程:服务端先比对最近一次 AI 综合分析的推荐与官方开奖结果
+    (逐玩法命中比对),把开奖结果、赛前 AI 推荐与理由、比对结论、
+    基本面/走势分析结论与人工录入补充信息(如有)作为归因上下文
+    构造提示词,调用 OpenAI 兼容接口输出复盘总结、逐玩法归因与
+    经验教训;每次生成保存一条历史记录(fp_match_llm_retrospects,
+    明细快照至 fp_match_llm_retrospect_items),调用过程写入请求
+    日志表(analysis_type=retrospect)。
+    复盘仅供改进分析方法参考,不构成投注建议。
+
+    Raises:
+        ResourceNotFoundError: 比赛不存在。
+        DataValidationError: 赛果未同步 / 未生成过 AI 综合分析 /
+            无已开奖玩法可比对(422)。
+        LlmNotConfiguredError: 未配置 LLM API Key(503)。
+        LlmServiceError: 大模型调用或输出解析失败(502)。
+    """
+    context = await llm_retrospect.build_retrospect_context(session, match_id)
+    result = await llm_retrospect.analyze_retrospect(context)
+    saved = await llm_retrospect.save_retrospect(session, result, context)
+    return LlmRetrospectRead.model_validate(saved)
 
 
 # ---------- 赛果开奖 /results ----------

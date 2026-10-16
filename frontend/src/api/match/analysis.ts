@@ -211,3 +211,72 @@ export async function listLlmRequestLogs(
   )
   return data
 }
+
+/** 复盘比对明细行(生成时点快照,含大模型事后归因) */
+export interface LlmRetrospectItem {
+  play_code: string
+  play_name: string
+  recommendation: string
+  confidence: number
+  alternatives: string[]
+  result: string | null
+  is_hit: boolean | null
+  reasoning: string
+  review: string | null
+}
+
+/** 大模型赛事复盘结果(总结 + 逐玩法归因明细 + 经验教训) */
+export interface LlmRetrospect {
+  retrospect_id: number
+  match_id: string
+  analysis_id: number
+  provider: string
+  model: string
+  summary: string
+  lessons: string[]
+  hit_count: number
+  total_count: number
+  items: LlmRetrospectItem[]
+  created_at: string
+}
+
+/** 复盘比对预览行(最近一次 AI 推荐 vs 官方开奖,系统实时计算) */
+export interface LlmRetrospectComparisonItem {
+  play_code: string
+  play_name: string
+  recommendation: string
+  confidence: number
+  alternatives: string[]
+  result: string | null
+  is_hit: boolean | null
+  reasoning: string
+}
+
+/** 赛事复盘 Tab 视图(比对预览 + 最近一次已保存复盘) */
+export interface LlmRetrospectView {
+  match_id: string
+  result_available: boolean
+  analysis_available: boolean
+  comparison: LlmRetrospectComparisonItem[]
+  retrospect: LlmRetrospect | null
+}
+
+/** 查询赛事复盘视图(比对预览实时计算,含最近一次已保存复盘) */
+export async function getLlmRetrospectView(
+  matchId: string,
+): Promise<LlmRetrospectView> {
+  const { data } = await request.get<LlmRetrospectView>(
+    `/api/v1/match/games/${matchId}/llm-retrospect`,
+  )
+  return data
+}
+
+/** 对比赛事结果与 AI 分析结果,调用大模型生成赛事复盘并保存 */
+export async function runLlmRetrospect(matchId: string): Promise<LlmRetrospect> {
+  const { data } = await request.post<LlmRetrospect>(
+    `/api/v1/match/games/${matchId}/llm-retrospect`,
+    undefined,
+    { timeout: LLM_TIMEOUT_MS },
+  )
+  return data
+}

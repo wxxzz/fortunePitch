@@ -12,3 +12,4 @@
 - [联赛看板页](league-dashboard.md) - /leagues 平铺卡片墙→单联赛看板(基本信息/积分榜总榜/近期赛程赛果)、Team左联Fundamentals NULLS LAST、GET /base/leagues/{id}/dashboard
 - [比赛补充信息](match-extra-info.md) - 深度分析页"其他信息"Tab人工录入伤停/阵型(5000字上限/整体覆盖)、新表fp_match_extra_info、GET+PUT /match/games/{id}/extra-info、注入llm与llm_fundamental提示词
 - [分析日志查看](llm-request-log-viewer.md) - AI分析Tab底部LlmLogViewer(fp_llm_request_logs零新表)、展开看请求参数/提示词/原始响应、GET /match/games/{id}/llm-request-logs、analysis_type派生(computed_field缺省回退analysis)
+- [赛事复盘](match-llm-retrospect.md) - 赛事复盘Tab先比对AI推荐vs开奖(resolve_recommendation_hit归一化)再LLM归因出总结+经验、新表fp_match_llm_retrospects(+items快照)、GET/POST /match/games/{id}/llm-retrospect、analysis_type=retrospect、赛事中心批量AI复盘按钮(GET预检跳过未开场次)

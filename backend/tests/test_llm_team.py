@@ -166,13 +166,13 @@ async def _seed_team(session_factory: async_sessionmaker) -> int:
                     team_result=result,
                 )
             )
-        # 后续赛程(未开赛,晚于当前时间)
+        # 后续赛程(未开赛,晚于当前时间;用相对日期避免固定日期随时间过期)
         session.add(
             TeamMatch(
                 team_id=team.team_id,
                 uniform_match_id=2000,
                 league_name="欧冠",
-                match_time=datetime.datetime(2026, 10, 15, 21, 0),
+                match_time=datetime.datetime.now() + datetime.timedelta(days=3),
                 home_team_name="对手队",
                 away_team_name="阿森纳",
                 is_home=False,
@@ -318,7 +318,10 @@ class TestBuildTeamContext:
         assert "主场战绩" in user_text
         assert "客场战绩" in user_text
         assert "2026-09-08 英超(4) 主场 0:2 vs 对手队" in user_text
-        assert "2026-10-15 欧冠 客场 vs 对手队(未开赛)" in user_text
+        upcoming_date = (datetime.datetime.now() + datetime.timedelta(days=3)).strftime(
+            "%Y-%m-%d"
+        )
+        assert f"{upcoming_date} 欧冠 客场 vs 对手队(未开赛)" in user_text
         assert "当前评分 1524,参与评分 6 场" in user_text
         assert "全称 阿森纳足球俱乐部" in user_text
 

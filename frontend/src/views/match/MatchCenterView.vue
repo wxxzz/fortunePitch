@@ -10,8 +10,10 @@ import { storeToRefs } from 'pinia'
 import { useMatchStore } from '@/stores/match'
 import { useBaseStore } from '@/stores/base'
 import {
+  getLlmRetrospectView,
   runLlmAnalysis,
   runLlmFundamentalAnalysis,
+  runLlmRetrospect,
   runLlmTrendAnalysis,
 } from '@/api/match/analysis'
 import FocusRecommendCard from '@/components/match/FocusRecommendCard.vue'
@@ -95,21 +97,42 @@ function handleOpenDetail(matchId: string): void {
 
 // ---------- 批量 AI 分析 ----------
 
-/** 批量分析类型,与深度分析页的三个单场分析接口一一对应 */
-type BatchKind = 'fundamental' | 'trend' | 'analysis'
+/** 批量分析类型,与深度分析页的单场接口一一对应(复盘对已完赛场次做事后归因) */
+type BatchKind = 'fundamental' | 'trend' | 'analysis' | 'retrospect'
 
 const BATCH_META: Record<
   BatchKind,
-  { label: string; run: (matchId: string) => Promise<unknown> }
+  {
+    label: string
+    run: (matchId: string) => Promise<unknown>
+    /** 调用前置校验:未通过时按跳过处理,不计失败(仅复盘需要) */
+    precheck?: (matchId: string) => Promise<boolean>
+  }
 > = {
   fundamental: { label: '批量基本面分析', run: runLlmFundamentalAnalysis },
   trend: { label: '批量赔率走势分析', run: runLlmTrendAnalysis },
   analysis: { label: '批量AI综合分析', run: runLlmAnalysis },
+  retrospect: {
+    label: '批量AI复盘',
+    run: runLlmRetrospect,
+    precheck: isRetrospectEligible,
+  },
+}
+
+/** 复盘前置校验:赛果已开奖 + 已有 AI 综合分析 + 存在可比对玩法(未满足按跳过处理;接口异常上抛由调用方计为失败) */
+async function isRetrospectEligible(matchId: string): Promise<boolean> {
+  const view = await getLlmRetrospectView(matchId)
+  return (
+    view.result_available &&
+    view.analysis_available &&
+    view.comparison.some((row) => row.is_hit !== null)
+  )
 }
 
 const runningBatch = ref<BatchKind | null>(null)
 const batchDone = ref(0)
 const batchTotal = ref(0)
+const batchSkipped = ref(0)
 const batchFailures = ref<string[]>([])
 const batchSummary = ref('')
 /** 用户请求取消:当前场次完成后停止,不再发起后续调用 */
@@ -129,15 +152,18 @@ function gameLabel(matchId: string): string {
   return `${teamName(game.home_team_id)} vs ${teamName(game.away_team_id)}`
 }
 
-/** 逐场串行调用深度分析接口:单场失败不影响后续,结果落库后可在深度分析页查看 */
+/** 逐场串行调用深度分析接口:单场失败不影响后续,结果落库后可在深度分析页查看;带前置校验的类型(复盘)未通过时跳过 */
 async function handleBatchAnalysis(kind: BatchKind): Promise<void> {
   if (isBatchRunning.value) return
   const targets = filteredGames.value.map((g) => g.match_id)
   if (targets.length === 0) return
-  const { label, run } = BATCH_META[kind]
+  const { label, run, precheck } = BATCH_META[kind]
   if (
     !window.confirm(
       `将对当前筛选出的 ${targets.length} 场比赛逐场执行「${label}」,` +
+        (precheck
+          ? '未开奖或尚未生成 AI 综合分析的比赛将自动跳过,'
+          : '') +
         '单场约需 10~30 秒,期间请勿关闭页面,是否继续?',
     )
   ) {
@@ -146,11 +172,28 @@ async function handleBatchAnalysis(kind: BatchKind): Promise<void> {
   runningBatch.value = kind
   batchDone.value = 0
   batchTotal.value = targets.length
+  batchSkipped.value = 0
   batchFailures.value = []
   batchSummary.value = ''
   batchCancelled.value = false
   for (const matchId of targets) {
     if (batchCancelled.value) break
+    if (precheck) {
+      let isEligible: boolean
+      try {
+        isEligible = await precheck(matchId)
+      } catch {
+        // 预检接口本身异常(网络/服务端错误)与"未满足前置条件"不同,计为失败
+        batchFailures.value.push(gameLabel(matchId))
+        batchDone.value += 1
+        continue
+      }
+      if (!isEligible) {
+        batchSkipped.value += 1
+        batchDone.value += 1
+        continue
+      }
+    }
     try {
       await run(matchId)
     } catch {
@@ -159,9 +202,10 @@ async function handleBatchAnalysis(kind: BatchKind): Promise<void> {
     batchDone.value += 1
   }
   const cancelled = batchCancelled.value && batchDone.value < batchTotal.value
-  const okCount = batchDone.value - batchFailures.value.length
+  const okCount = batchDone.value - batchFailures.value.length - batchSkipped.value
   batchSummary.value =
     (cancelled ? `已取消,已分析 ${okCount}/${batchTotal.value} 场成功` : `「${label}」完成:${okCount}/${batchTotal.value} 场成功`) +
+    (batchSkipped.value > 0 ? `,跳过 ${batchSkipped.value} 场(未开奖或无 AI 分析)` : '') +
     (batchFailures.value.length > 0
       ? `,失败场次:${batchFailures.value.join('、')}`
       : '')
@@ -243,6 +287,14 @@ function handleConfirmSuccess(betCount: number): void {
           {{ runningBatch === 'analysis' ? '分析中…' : '批量AI综合分析' }}
         </button>
         <button
+          class="match-center__batch-btn"
+          type="button"
+          :disabled="isBatchRunning || filteredGames.length === 0"
+          @click="handleBatchAnalysis('retrospect')"
+        >
+          {{ runningBatch === 'retrospect' ? '复盘中…' : '批量AI复盘' }}
+        </button>
+        <button
           v-if="isBatchRunning"
           class="match-center__batch-btn match-center__batch-btn--cancel"
           type="button"
@@ -257,6 +309,7 @@ function handleConfirmSuccess(betCount: number): void {
       </div>
       <p v-if="isBatchRunning" class="match-center__batch-progress" role="status">
         {{ runningBatchLabel }}进行中:{{ batchDone }}/{{ batchTotal }}
+        <template v-if="batchSkipped > 0">(已跳过 {{ batchSkipped }} 场)</template>
         <template v-if="batchFailures.length > 0">(已失败 {{ batchFailures.length }} 场)</template>
       </p>
       <p v-else-if="batchSummary" class="match-center__batch-summary" role="status">
