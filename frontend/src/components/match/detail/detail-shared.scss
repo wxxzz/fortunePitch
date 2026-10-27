@@ -1,0 +1,211 @@
+@use '@/styles/variables' as vars;
+
+/**
+ * 深度分析各 Tab 面板共用样式(BEM 元素在包含方的块选择器下展开)。
+ *
+ * 用法:在组件 scoped 样式的块选择器内引入对应 mixin,
+ * 如 `.advanced-tab { @include shared.panel; ... }`;
+ * 模板中的元素类名使用各自组件的块前缀(如 `advanced-tab__hint`)。
+ */
+
+/** 面板骨架:纵向布局 + 标题/提示/错误/风险/结果圆点/表格等公共元素 */
+@mixin panel {
+  display: flex;
+  flex-direction: column;
+  gap: vars.$spacing-md;
+
+  &__section-title {
+    margin: vars.$spacing-md 0 0;
+    font-size: vars.$font-size-md;
+  }
+
+  &__hint {
+    margin: 0;
+    font-size: vars.$font-size-sm;
+    color: vars.$color-text-secondary;
+  }
+
+  &__error {
+    color: vars.$color-danger;
+  }
+
+  &__risks {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+
+    li {
+      display: flex;
+      align-items: center;
+      gap: vars.$spacing-sm;
+      padding: vars.$spacing-sm vars.$spacing-md;
+      background: rgba(212, 136, 6, 0.08);
+      border: 1px solid rgba(212, 136, 6, 0.35);
+      border-radius: vars.$border-radius;
+      margin-bottom: vars.$spacing-sm;
+      font-size: vars.$font-size-sm;
+    }
+  }
+
+  &__risk-icon {
+    color: vars.$color-warning;
+  }
+
+  &__form-dot {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    font-size: vars.$font-size-sm;
+    font-weight: 600;
+    color: #fff;
+
+    &--w {
+      background: vars.$color-positive;
+    }
+
+    &--d {
+      background: vars.$color-neutral;
+    }
+
+    &--l {
+      background: vars.$color-negative;
+    }
+  }
+
+  &__table {
+    width: 100%;
+    border-collapse: collapse;
+    background: vars.$color-surface;
+    border: 1px solid vars.$color-border;
+    border-radius: vars.$border-radius;
+
+    th,
+    td {
+      padding: vars.$spacing-sm vars.$spacing-md;
+      border-bottom: 1px solid vars.$color-border;
+      text-align: left;
+    }
+
+    th {
+      background: vars.$color-surface-hover;
+    }
+  }
+}
+
+/** 生成/保存按钮工具条 */
+@mixin actions {
+  &__llm-toolbar {
+    display: flex;
+    flex-direction: column;
+    gap: vars.$spacing-xs;
+  }
+
+  &__llm-button {
+    align-self: flex-start;
+    padding: vars.$spacing-sm vars.$spacing-lg;
+    background: vars.$color-primary;
+    color: #fff;
+    border: none;
+    border-radius: vars.$border-radius;
+    font-weight: 600;
+    cursor: pointer;
+
+    &:hover:not(:disabled) {
+      filter: brightness(1.05);
+    }
+
+    &:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+  }
+}
+
+/** 大模型分析结果展示(摘要卡 + 分玩法卡片 + 置信度条) */
+@mixin llm {
+  &__llm-summary {
+    display: flex;
+    flex-direction: column;
+    gap: vars.$spacing-xs;
+    padding: vars.$spacing-lg;
+    background: vars.$color-primary-light;
+    border: 1px solid vars.$color-primary;
+    border-radius: vars.$border-radius;
+  }
+
+  &__llm-meta {
+    align-self: flex-end;
+    font-size: vars.$font-size-sm;
+    color: vars.$color-text-secondary;
+  }
+
+  &__llm-summary-text {
+    margin: 0;
+    line-height: 1.7;
+  }
+
+  &__llm-plays {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: vars.$spacing-md;
+  }
+
+  &__llm-play {
+    display: flex;
+    flex-direction: column;
+    gap: vars.$spacing-sm;
+    padding: vars.$spacing-md;
+    background: vars.$color-surface;
+    border: 1px solid vars.$color-border;
+    border-radius: vars.$border-radius;
+  }
+
+  &__llm-play-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: vars.$spacing-sm;
+  }
+
+  &__llm-play-name {
+    font-size: vars.$font-size-sm;
+    color: vars.$color-text-secondary;
+  }
+
+  &__llm-play-rec {
+    font-size: vars.$font-size-lg;
+    color: vars.$color-positive;
+  }
+
+  &__llm-confidence {
+    display: flex;
+    align-items: center;
+    gap: vars.$spacing-sm;
+    font-size: vars.$font-size-sm;
+    color: vars.$color-text-secondary;
+  }
+
+  &__llm-bar {
+    flex: 1;
+    height: 6px;
+    background: vars.$color-border;
+    border-radius: 3px;
+    overflow: hidden;
+  }
+
+  &__llm-bar-fill {
+    display: block;
+    height: 100%;
+    background: vars.$color-primary;
+  }
+
+  &__llm-reasoning {
+    margin: 0;
+    font-size: vars.$font-size-sm;
+    line-height: 1.6;
+    color: vars.$color-text-secondary;
+  }
+}

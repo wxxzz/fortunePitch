@@ -14,3 +14,4 @@
 - [分析日志查看](llm-request-log-viewer.md) - AI分析Tab底部LlmLogViewer(fp_llm_request_logs零新表)、展开看请求参数/提示词/原始响应、GET /match/games/{id}/llm-request-logs、analysis_type派生(computed_field缺省回退analysis)
 - [赛事复盘](match-llm-retrospect.md) - 赛事复盘Tab先比对AI推荐vs开奖(resolve_recommendation_hit归一化)再LLM归因出总结+经验、新表fp_match_llm_retrospects(+items快照)、GET/POST /match/games/{id}/llm-retrospect、analysis_type=retrospect、赛事中心批量AI复盘按钮(GET预检跳过未开场次)
 - [AI复盘经验总结](llm-lesson-summary.md) - AI分析页手动触发生成:每场取最新复盘(≤30场)LLM归纳共性经验5~10条、新表fp_match_llm_lesson_summaries(log_id关联请求日志可查输入输出)、GET/POST /match/llm-lesson-summaries、analysis_type=lesson_summary(日志match_id="lessons:summary")、最近一次注入综合分析提示词【历史复盘经验总结】段、AI分析页两选项卡(AI分析结果/AI复盘总结)
+- [深度分析页组件化重构](match-detail-refactor.md) - MatchDetailView按Tab拆7子组件(components/match/detail/)+每数据域一composable(composables/,useLlmResource通用三AI区块)、detail-shared.scss三mixin、KeepAlive缓存/复盘不缓存、analysisSettled跨Tab刷新日志
