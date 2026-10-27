@@ -44,6 +44,27 @@ SAMPLE_LIST: list[dict[str, typing.Any]] = [
         "uniformLeagueId": 999,
         "seasonList": [{"seasonId": 1, "seasonName": "2026/2027"}],
     },
+    {
+        "group": "normal",
+        "tier": 2,
+        "leagueAbbCnName": "亚冠精英",
+        "uniformLeagueId": 41,
+        "seasonList": [{"seasonId": 10, "seasonName": "2026/2027"}],
+    },
+    {
+        "group": "normal",
+        "tier": 2,
+        "leagueAbbCnName": "欧国联",
+        "uniformLeagueId": 60,
+        "seasonList": [{"seasonId": 11, "seasonName": "2026/2027"}],
+    },
+    {
+        "group": "normal",
+        "tier": 2,
+        "leagueAbbCnName": "韩职",
+        "uniformLeagueId": 50,
+        "seasonList": [{"seasonId": 12, "seasonName": "2026/2027"}],
+    },
 ]
 SAMPLE_DETAIL_XIJIA = {
     "cnName": "西班牙甲级联赛",
@@ -64,8 +85,13 @@ class TestLeagueParser:
         assert item["uniformLeagueId"] == 24
 
     def test_find_league_by_partial_name(self) -> None:
-        item = league_parser.find_league_item(SAMPLE_LIST, "英")
-        assert item["leagueAbbCnName"] == "英超"
+        item = league_parser.find_league_item(SAMPLE_LIST, "国联")
+        assert item["leagueAbbCnName"] == "欧国联"
+
+    def test_find_league_partial_ambiguous_across_cups(self) -> None:
+        # “英”同时命中“英超”与“亚冠精英”(精英含“英”),判歧义
+        with pytest.raises(Exception, match="歧义"):
+            league_parser.find_league_item(SAMPLE_LIST, "英")
 
     def test_find_league_ambiguous(self) -> None:
         with pytest.raises(Exception, match="歧义"):
@@ -74,6 +100,68 @@ class TestLeagueParser:
     def test_find_league_not_found(self) -> None:
         with pytest.raises(Exception, match="未在竞彩网联赛资料中找到"):
             league_parser.find_league_item(SAMPLE_LIST, "中超")
+
+    def test_find_league_by_compressed_abbr(self) -> None:
+        # 库内 league_name 为竞彩网详情全称,与列表简称既不相等也不互为子串,
+        # 经“词元压缩”推导简称候选后精确匹配
+        item = league_parser.find_league_item(SAMPLE_LIST, "英格兰超级联赛")
+        assert item["leagueAbbCnName"] == "英超"
+        item = league_parser.find_league_item(SAMPLE_LIST, "亚洲冠军精英联赛")
+        assert item["leagueAbbCnName"] == "亚冠精英"
+        item = league_parser.find_league_item(SAMPLE_LIST, "欧洲国家联赛")
+        assert item["leagueAbbCnName"] == "欧国联"
+        item = league_parser.find_league_item(SAMPLE_LIST, "韩国职业联赛")
+        assert item["leagueAbbCnName"] == "韩职"
+
+    def test_find_league_compressed_abbr_falls_through(self) -> None:
+        # 推导出的候选简称在列表中均不存在时,维持“未找到”报错口径
+        with pytest.raises(Exception, match="未在竞彩网联赛资料中找到"):
+            league_parser.find_league_item(SAMPLE_LIST, "德国乙级联赛")
+
+    def test_derived_league_abbr_candidates(self) -> None:
+        # “国家/地区 + 级别联赛”式:压缩 + 结尾泛称变体(删除/取首字)
+        assert league_parser.derived_league_abbr_candidates("德国乙级联赛") == [
+            "德乙联赛",
+            "德乙",
+            "德乙联",
+        ]
+        # 结尾“联赛”取首字保留(欧洲国家联赛 -> 欧国联)
+        assert league_parser.derived_league_abbr_candidates("欧洲国家联赛") == [
+            "欧国联赛",
+            "欧国",
+            "欧国联",
+        ]
+        # 非词元片段原样透传(亚洲冠军精英联赛 -> 亚冠精英)
+        assert league_parser.derived_league_abbr_candidates("亚洲冠军精英联赛") == [
+            "亚冠精英联赛",
+            "亚冠精英",
+            "亚冠精英联",
+        ]
+        # 结尾“大联盟”删除(美国职业大联盟 -> 美职)
+        assert league_parser.derived_league_abbr_candidates("美国职业大联盟") == [
+            "美职大联盟",
+            "美职",
+            "美职大",
+        ]
+        # 无结尾泛称时仅有压缩结果本身
+        assert league_parser.derived_league_abbr_candidates("英格兰联赛杯") == ["英联赛杯"]
+        assert league_parser.derived_league_abbr_candidates("亚运会男足") == ["亚运男足"]
+        # 已是简称/无词元的名称原样返回
+        assert league_parser.derived_league_abbr_candidates("德乙") == ["德乙"]
+        assert league_parser.derived_league_abbr_candidates("欧冠") == ["欧冠"]
+
+    def test_derived_league_abbr_candidates_edge_cases(self) -> None:
+        # 空串/纯空白无候选
+        assert league_parser.derived_league_abbr_candidates("") == []
+        assert league_parser.derived_league_abbr_candidates("   ") == []
+        # 单字与结尾泛称整词:仅原样返回,不生成删除/取首字变体
+        assert league_parser.derived_league_abbr_candidates("甲") == ["甲"]
+        assert league_parser.derived_league_abbr_candidates("联赛") == ["联赛"]
+        assert league_parser.derived_league_abbr_candidates("大联盟") == ["大联盟"]
+        # 最长词元优先:“英格兰”作为三字词元整体压缩
+        assert league_parser.derived_league_abbr_candidates("英格兰足总杯") == [
+            "英足总杯"
+        ]
 
     def test_normalize_season(self) -> None:
         assert league_parser.normalize_season("2026/2027") == "2026-2027"

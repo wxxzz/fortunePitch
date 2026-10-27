@@ -8,8 +8,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.v1.base.schemas import (
     DashboardLeagueRead,
     DashboardStatisticsRead,
+    LabelCountRead,
     LeagueCreate,
     LeagueDashboardRead,
+    LeagueFavoriteStatsRead,
+    LeagueInsightsRead,
     LeagueMatchRowRead,
     LeagueRead,
     LeagueStandingRowRead,
@@ -27,7 +30,7 @@ from app.core.database import get_db_session
 from app.core.exceptions import ResourceNotFoundError
 from app.core.security import verify_api_key
 from app.models import League, Player, Team, TeamFundamentals, TeamLlmAnalysis
-from app.services import crud, league_dashboard, llm_team, team_dashboard
+from app.services import crud, league_dashboard, league_insights, llm_team, team_dashboard
 
 router = APIRouter(prefix="/base", tags=["base"], dependencies=[Depends(verify_api_key)])
 
@@ -142,6 +145,64 @@ async def get_league_dashboard(
             )
             for row in data.upcoming_fixtures
         ],
+    )
+
+
+@router.get("/leagues/{league_id}/insights", response_model=LeagueInsightsRead)
+async def get_league_insights(
+    league_id: int, session: AsyncSession = Depends(get_db_session)
+) -> LeagueInsightsRead:
+    """联赛多维度分析:对已完赛场次统计多维度分布。
+
+    维度:胜平负分布、进球(场均/3 球及以上/双方进球)、总进球分布、
+    半全场分布、让球胜平负分布、热门命中(胜平负 SP 最低项的开奖
+    命中率)。统计口径为该联赛全部已完赛且有比分的场次(不限赛季)。
+
+    Raises:
+        ResourceNotFoundError: 联赛不存在。
+    """
+    data = await league_insights.get_league_insights(session, league_id)
+    favorite = (
+        LeagueFavoriteStatsRead(
+            count=data.favorite.count,
+            hit_count=data.favorite.hit_count,
+            hit_rate=data.favorite.hit_rate,
+            avg_sp=data.favorite.avg_sp,
+        )
+        if data.favorite is not None
+        else None
+    )
+    return LeagueInsightsRead(
+        league_id=data.league.league_id,
+        league_name=data.league.league_name,
+        season=data.season,
+        finished_count=data.finished_count,
+        home_win=data.home_win,
+        draw=data.draw,
+        away_win=data.away_win,
+        home_win_rate=data.home_win_rate,
+        draw_rate=data.draw_rate,
+        away_win_rate=data.away_win_rate,
+        avg_total_goals=data.avg_total_goals,
+        avg_home_goals=data.avg_home_goals,
+        avg_away_goals=data.avg_away_goals,
+        over2_5_count=data.over2_5_count,
+        over2_5_rate=data.over2_5_rate,
+        btts_count=data.btts_count,
+        btts_rate=data.btts_rate,
+        total_goals=[
+            LabelCountRead(label=row.label, count=row.count)
+            for row in data.total_goals
+        ],
+        half_full=[
+            LabelCountRead(label=row.label, count=row.count)
+            for row in data.half_full
+        ],
+        handicap=[
+            LabelCountRead(label=row.label, count=row.count)
+            for row in data.handicap
+        ],
+        favorite=favorite,
     )
 
 

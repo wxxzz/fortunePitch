@@ -344,6 +344,27 @@ class LlmRetrospectViewRead(BaseModel):
     )
 
 
+class LlmLessonSummaryRead(BaseModel):
+    """大模型复盘经验总结响应模型(归纳总结 + 共性经验)。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    summary_id: int = Field(description="总结记录 ID(落库主键)")
+    provider: str = Field(description="服务商:qwen / ark")
+    model: str = Field(description="实际使用的模型名")
+    summary: str = Field(description="经验归纳总结")
+    lessons: list[str] = Field(
+        default_factory=list, description="共性经验(5~10条,指向可改进的分析方法)"
+    )
+    retrospect_count: int = Field(description="本次总结输入覆盖的复盘场次数")
+    total_hit: int = Field(description="输入复盘的合计命中数(已开奖玩法口径)")
+    total_decided: int = Field(description="输入复盘的合计已开奖玩法数")
+    log_id: int | None = Field(
+        default=None, description="本次总结的请求日志 ID(日志写失败为 None)"
+    )
+    created_at: datetime.datetime = Field(description="生成时间")
+
+
 # ---------- AI 分析结果查询 ----------
 
 class LlmRecommendationRowRead(BaseModel):

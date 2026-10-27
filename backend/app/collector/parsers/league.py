@@ -23,19 +23,112 @@ _COUNTRY_SUFFIXES = (
     "杯",
 )
 
+# 联赛全称中的常见语义片段 -> 简称片段(“词元压缩”推导简称用)
+#
+# 已知冲突:“瑞典”与“瑞士”均压缩为“瑞”(竞彩网列表仅有“瑞超”)。
+# 候选层按“唯一精确命中”生效,列表同时出现两国联赛时会因歧义回退
+# 包含匹配;仅单国入库时存在静默误配风险,新增此类国家时需复核映射。
+# 国家/地区
+_ABBR_TOKENS: dict[str, str] = {
+    "英格兰": "英",
+    "德国": "德",
+    "西班牙": "西",
+    "意大利": "意",
+    "法国": "法",
+    "韩国": "韩",
+    "日本": "日",
+    "美国": "美",
+    "沙特": "沙",
+    "澳大利亚": "澳",
+    "挪威": "挪",
+    "葡萄牙": "葡",
+    "荷兰": "荷",
+    "瑞典": "瑞",
+    "瑞士": "瑞",
+    "芬兰": "芬",
+    "中国": "中",
+    "亚洲": "亚",
+    "欧洲": "欧",
+    # 玩法/性质词
+    "超级": "超",
+    "甲级": "甲",
+    "乙级": "乙",
+    "丙级": "丙",
+    "冠军": "冠",
+    "职业": "职",
+    "国家": "国",
+    "协会": "协",
+    "运动会": "运",
+    "运会": "运",
+}
+_ABBR_TOKEN_MAX_LEN = max(len(token) for token in _ABBR_TOKENS)
+
+# 结尾泛称:压缩结果以此结尾时,额外生成“删除”与“取首字”两种候选
+_TRAILING_DROPS = ("联赛", "大联盟")
+
+
+def _token_at(name: str, pos: int) -> tuple[str, str] | None:
+    """返回 name 在 pos 处可匹配的最长词元 ``(原文, 简称片段)``。"""
+    upper = min(_ABBR_TOKEN_MAX_LEN, len(name) - pos)
+    for length in range(upper, 1, -1):
+        piece = name[pos : pos + length]
+        if piece in _ABBR_TOKENS:
+            return piece, _ABBR_TOKENS[piece]
+    return None
+
+
+def derived_league_abbr_candidates(full_name: str) -> list[str]:
+    """从联赛全称推导竞彩网简称候选列表。
+
+    库内 ``league_name`` 为竞彩网详情页全称,而联赛列表条目仅含简称,
+    两者既不相等也不互为子串(如“德国乙级联赛”vs“德乙”、
+    “亚洲冠军精英联赛”vs“亚冠精英”)。采用“词元压缩”:国家/地区与
+    性质词按映射取短写,其余片段原样保留;结尾泛称(“联赛”“大联盟”)
+    额外生成删除/取首字变体。一个全称可对应多个候选
+    (如“欧洲国家联赛”->“欧国联赛”/“欧国”/“欧国联”),由调用方
+    逐个与列表简称精确比对,唯一命中才生效。
+    """
+    if not full_name.strip():
+        return []
+    parts: list[str] = []
+    i = 0
+    while i < len(full_name):
+        token = _token_at(full_name, i)
+        if token is not None:
+            parts.append(token[1])
+            i += len(token[0])
+            continue
+        # 无词元起点:原样透传,直到下一个词元起点或串尾
+        j = i + 1
+        while j < len(full_name) and _token_at(full_name, j) is None:
+            j += 1
+        parts.append(full_name[i:j])
+        i = j
+    compressed = "".join(parts)
+
+    candidates = [compressed]
+    for drop in _TRAILING_DROPS:
+        if compressed.endswith(drop) and len(compressed) > len(drop):
+            stripped = compressed[: -len(drop)]
+            candidates.append(stripped)
+            candidates.append(stripped + drop[0])
+    return list(dict.fromkeys(candidates))
+
 
 def find_league_item(
     items: list[dict[str, typing.Any]], league_name: str
 ) -> dict[str, typing.Any]:
     """按名称从展平后的联赛列表中定位唯一条目。
 
-    匹配优先级:简称精确相等 > 简称互相包含(如“甲”匹配“西甲”)。
-    同一联赛可能出现在多个分组(hot/normal 各一条,uniformLeagueId
-    相同),按 uniformLeagueId 去重后才判歧义。
+    匹配优先级:简称精确相等 > 全称词元压缩推导简称精确相等
+    (如“德国乙级联赛”->“德乙”、“亚洲冠军精英联赛”->“亚冠精英”)
+    > 简称互相包含(如“甲”匹配“西甲”)。同一联赛可能出现在多个分组
+    (hot/normal 各一条,uniformLeagueId 相同),按 uniformLeagueId
+    去重后才判歧义。
 
     Args:
         items: ``fetch_league_list`` 返回的展平列表。
-        league_name: 用户输入的联赛名称(如“西甲”)。
+        league_name: 用户输入的联赛名称(如“西甲”或库内全称“西班牙甲级联赛”)。
 
     Returns:
         唯一匹配的联赛条目。
@@ -56,6 +149,17 @@ def find_league_item(
         raise DataValidationError(
             f"联赛名称“{name}”匹配到多个条目,请使用更精确的名称"
         )
+
+    # 全称按“词元压缩”推导简称候选后逐个精确匹配;候选无果或匹配
+    # 不唯一时继续走包含匹配,维持原有歧义/未找到报错口径
+    candidate_matches = _dedupe(
+        it
+        for candidate in derived_league_abbr_candidates(name)
+        for it in items
+        if it.get("leagueAbbCnName") == candidate
+    )
+    if len(candidate_matches) == 1:
+        return candidate_matches[0]
 
     partial = _dedupe(
         it

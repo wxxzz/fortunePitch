@@ -15,6 +15,7 @@ import {
   listLlmRecommendations,
   type LlmRecommendationRow,
 } from '@/api/match/analysis'
+import LessonSummaryPanel from '@/components/match/LessonSummaryPanel.vue'
 
 const router = useRouter()
 
@@ -33,6 +34,8 @@ const selectedDate = ref(todayIso())
 const minConfidence = ref<number>(0.6)
 /** 当前激活的玩法选项卡 */
 const activePlayCode = ref<string>('HAD')
+/** 顶部视图选项卡:AI 分析结果 / AI 复盘总结 */
+const activeView = ref<'results' | 'summary'>('results')
 
 const rows = ref<LlmRecommendationRow[]>([])
 const isLoading = ref(false)
@@ -135,141 +138,171 @@ onMounted(() => {
     <header class="ai-analysis__header">
       <h2 class="ai-analysis__title">AI 分析结果</h2>
       <p class="ai-analysis__subtitle">
-        查询已保存的大模型分析推荐:按售卖日过滤,每场比赛取最近一次分析,
-        输出五种玩法的推荐与备选选项(附最新赔率)、开奖对比、置信度与依据。
+        「AI 分析结果」查询已保存的大模型分析推荐:按售卖日过滤,每场比赛取最近一次分析,
+        输出五种玩法的推荐与备选选项(附最新赔率)、开奖对比、置信度与依据;
+        「AI 复盘总结」归纳各场复盘的共性经验并注入后续综合分析。
         结果为数据分析参考,不构成投注建议。
       </p>
     </header>
 
-    <div class="ai-analysis__toolbar">
-      <label class="ai-analysis__filter">
-        <span>售卖日期</span>
-        <input
-          v-model="selectedDate"
-          class="ai-analysis__date-input"
-          type="date"
-          :disabled="isLoading"
-          @change="fetchRecommendations"
-        />
-      </label>
-      <label class="ai-analysis__filter">
-        <span>置信度下限</span>
-        <input
-          v-model.number="minConfidence"
-          class="ai-analysis__confidence-input"
-          type="number"
-          min="0"
-          max="1"
-          step="0.05"
-          :disabled="isLoading"
-        />
-      </label>
+    <!-- 顶部视图选项卡:AI 分析结果 / AI 复盘总结 -->
+    <div class="ai-analysis__views" role="tablist" aria-label="AI 分析视图切换">
       <button
-        class="ai-analysis__btn"
-        type="button"
-        :disabled="!canQuery"
-        @click="fetchRecommendations"
-      >
-        查询
-      </button>
-      <span v-if="totalCount > 0" class="ai-analysis__meta">
-        共 {{ totalCount }} 条推荐<template v-if="hitStats.settled > 0">
-          · 当前玩法已开奖命中 {{ hitStats.hit }}/{{ hitStats.settled }}</template
-        >
-      </span>
-    </div>
-
-    <p v-if="errorMessage" class="ai-analysis__error" role="alert">{{ errorMessage }}</p>
-    <p v-if="isLoading" class="ai-analysis__hint">加载中…</p>
-
-    <div class="ai-analysis__tabs" role="tablist">
-      <button
-        v-for="tab in PLAY_TABS"
-        :key="tab.code"
-        class="ai-analysis__tab"
-        :class="{ 'ai-analysis__tab--active': activePlayCode === tab.code }"
+        class="ai-analysis__view-tab"
+        :class="{ 'ai-analysis__view-tab--active': activeView === 'results' }"
         type="button"
         role="tab"
-        :aria-selected="activePlayCode === tab.code"
-        @click="selectPlay(tab.code)"
+        :aria-selected="activeView === 'results'"
+        @click="activeView = 'results'"
       >
-        {{ tab.label }}
-        <span class="ai-analysis__tab-count">{{ playCounts[tab.code] ?? 0 }}</span>
+        AI 分析结果
+      </button>
+      <button
+        class="ai-analysis__view-tab"
+        :class="{ 'ai-analysis__view-tab--active': activeView === 'summary' }"
+        type="button"
+        role="tab"
+        :aria-selected="activeView === 'summary'"
+        @click="activeView = 'summary'"
+      >
+        AI 复盘总结
       </button>
     </div>
 
-    <table v-if="activeRows.length > 0" class="ai-analysis__table">
-      <thead>
-        <tr>
-          <th>编号</th>
-          <th>联赛 / 开赛</th>
-          <th>主队</th>
-          <th>客队</th>
-          <th>推荐</th>
-          <th>置信度</th>
-          <th>备选</th>
-          <th>开奖结果</th>
-          <th>对比</th>
-          <th>依据</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-for="row in activeRows" :key="`${row.match_id}:${row.play_code}`">
-          <td class="ai-analysis__match-num">{{ row.match_num_str || '—' }}</td>
-          <td class="ai-analysis__match-cell">
-            <button
-              class="ai-analysis__match-btn"
-              type="button"
-              @click="openMatchDetail(row.match_id)"
-            >
-              <span class="ai-analysis__league">{{ row.league_name ?? '—' }}</span>
-              <span class="ai-analysis__time">{{ formatMatchTime(row.match_time) }}</span>
-            </button>
-          </td>
-          <td class="ai-analysis__team ai-analysis__team--home">{{ row.home_team_name ?? '—' }}</td>
-          <td class="ai-analysis__team">{{ row.away_team_name ?? '—' }}</td>
-          <td class="ai-analysis__recommendation">
-            {{ formatOptionWithOdds(row.recommendation, row.recommendation_odds) }}
-          </td>
-          <td>
-            <span
-              class="ai-analysis__confidence"
-              :class="`ai-analysis__confidence--${confidenceTone(row.confidence)}`"
-            >
-              {{ (row.confidence * 100).toFixed(0) }}%
-            </span>
-          </td>
-          <td class="ai-analysis__alternatives">
-            <template v-if="row.alternatives.length > 0">
-              {{
-                row.alternatives
-                  .map((alt, index) => formatOptionWithOdds(alt, row.alternative_odds[index] ?? null))
-                  .join(' / ')
-              }}
-            </template>
-            <template v-else>—</template>
-          </td>
-          <td class="ai-analysis__result">{{ row.result ?? '—' }}</td>
-          <td>
-            <span
-              v-if="row.is_hit !== null"
-              class="ai-analysis__hit"
-              :class="
-                row.is_hit ? 'ai-analysis__hit--hit' : 'ai-analysis__hit--miss'
-              "
-            >
-              {{ row.is_hit ? '命中' : '未中' }}
-            </span>
-            <span v-else class="ai-analysis__hit ai-analysis__hit--pending">未开奖</span>
-          </td>
-          <td class="ai-analysis__reasoning">{{ row.reasoning }}</td>
-        </tr>
-      </tbody>
-    </table>
-    <p v-else-if="!isLoading && !errorMessage" class="ai-analysis__empty">
-      该日期暂无{{ PLAY_TABS.find((t) => t.code === activePlayCode)?.label }}玩法的 AI 推荐。
-      可在赛事中心对比赛做深度分析后,再回到本页查询。
-    </p>
+    <template v-if="activeView === 'results'">
+      <div class="ai-analysis__toolbar">
+        <label class="ai-analysis__filter">
+          <span>售卖日期</span>
+          <input
+            v-model="selectedDate"
+            class="ai-analysis__date-input"
+            type="date"
+            :disabled="isLoading"
+            @change="fetchRecommendations"
+          />
+        </label>
+        <label class="ai-analysis__filter">
+          <span>置信度下限</span>
+          <input
+            v-model.number="minConfidence"
+            class="ai-analysis__confidence-input"
+            type="number"
+            min="0"
+            max="1"
+            step="0.05"
+            :disabled="isLoading"
+          />
+        </label>
+        <button
+          class="ai-analysis__btn"
+          type="button"
+          :disabled="!canQuery"
+          @click="fetchRecommendations"
+        >
+          查询
+        </button>
+        <span v-if="totalCount > 0" class="ai-analysis__meta">
+          共 {{ totalCount }} 条推荐<template v-if="hitStats.settled > 0">
+            · 当前玩法已开奖命中 {{ hitStats.hit }}/{{ hitStats.settled }}</template
+          >
+        </span>
+      </div>
+
+      <p v-if="errorMessage" class="ai-analysis__error" role="alert">{{ errorMessage }}</p>
+      <p v-if="isLoading" class="ai-analysis__hint">加载中…</p>
+
+      <div class="ai-analysis__tabs" role="tablist">
+        <button
+          v-for="tab in PLAY_TABS"
+          :key="tab.code"
+          class="ai-analysis__tab"
+          :class="{ 'ai-analysis__tab--active': activePlayCode === tab.code }"
+          type="button"
+          role="tab"
+          :aria-selected="activePlayCode === tab.code"
+          @click="selectPlay(tab.code)"
+        >
+          {{ tab.label }}
+          <span class="ai-analysis__tab-count">{{ playCounts[tab.code] ?? 0 }}</span>
+        </button>
+      </div>
+
+      <table v-if="activeRows.length > 0" class="ai-analysis__table">
+        <thead>
+          <tr>
+            <th>编号</th>
+            <th>联赛 / 开赛</th>
+            <th>主队</th>
+            <th>客队</th>
+            <th>推荐</th>
+            <th>置信度</th>
+            <th>备选</th>
+            <th>开奖结果</th>
+            <th>对比</th>
+            <th>依据</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="row in activeRows" :key="`${row.match_id}:${row.play_code}`">
+            <td class="ai-analysis__match-num">{{ row.match_num_str || '—' }}</td>
+            <td class="ai-analysis__match-cell">
+              <button
+                class="ai-analysis__match-btn"
+                type="button"
+                @click="openMatchDetail(row.match_id)"
+              >
+                <span class="ai-analysis__league">{{ row.league_name ?? '—' }}</span>
+                <span class="ai-analysis__time">{{ formatMatchTime(row.match_time) }}</span>
+              </button>
+            </td>
+            <td class="ai-analysis__team ai-analysis__team--home">{{ row.home_team_name ?? '—' }}</td>
+            <td class="ai-analysis__team">{{ row.away_team_name ?? '—' }}</td>
+            <td class="ai-analysis__recommendation">
+              {{ formatOptionWithOdds(row.recommendation, row.recommendation_odds) }}
+            </td>
+            <td>
+              <span
+                class="ai-analysis__confidence"
+                :class="`ai-analysis__confidence--${confidenceTone(row.confidence)}`"
+              >
+                {{ (row.confidence * 100).toFixed(0) }}%
+              </span>
+            </td>
+            <td class="ai-analysis__alternatives">
+              <template v-if="row.alternatives.length > 0">
+                {{
+                  row.alternatives
+                    .map((alt, index) => formatOptionWithOdds(alt, row.alternative_odds[index] ?? null))
+                    .join(' / ')
+                }}
+              </template>
+              <template v-else>—</template>
+            </td>
+            <td class="ai-analysis__result">{{ row.result ?? '—' }}</td>
+            <td>
+              <span
+                v-if="row.is_hit !== null"
+                class="ai-analysis__hit"
+                :class="
+                  row.is_hit ? 'ai-analysis__hit--hit' : 'ai-analysis__hit--miss'
+                "
+              >
+                {{ row.is_hit ? '命中' : '未中' }}
+              </span>
+              <span v-else class="ai-analysis__hit ai-analysis__hit--pending">未开奖</span>
+            </td>
+            <td class="ai-analysis__reasoning">{{ row.reasoning }}</td>
+          </tr>
+        </tbody>
+      </table>
+      <p v-else-if="!isLoading && !errorMessage" class="ai-analysis__empty">
+        该日期暂无{{ PLAY_TABS.find((t) => t.code === activePlayCode)?.label }}玩法的 AI 推荐。
+        可在赛事中心对比赛做深度分析后,再回到本页查询。
+      </p>
+    </template>
+
+    <!-- AI 复盘总结:归纳各场复盘共性经验,注入后续综合分析 -->
+    <LessonSummaryPanel v-else />
   </section>
 </template>
 
@@ -292,6 +325,36 @@ onMounted(() => {
     margin: 0;
     color: vars.$color-text-secondary;
     font-size: vars.$font-size-md;
+  }
+
+  &__views {
+    display: flex;
+    gap: vars.$spacing-sm;
+    margin-bottom: vars.$spacing-md;
+    border-bottom: 2px solid vars.$color-border;
+  }
+
+  &__view-tab {
+    padding: vars.$spacing-sm vars.$spacing-lg;
+    border: none;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -2px;
+    background: transparent;
+    color: vars.$color-text-secondary;
+    font-size: vars.$font-size-md;
+    font-weight: 500;
+    cursor: pointer;
+    transition: color 0.15s ease, border-color 0.15s ease;
+
+    &:hover {
+      color: vars.$color-primary;
+    }
+
+    &--active {
+      border-bottom-color: vars.$color-primary;
+      color: vars.$color-primary;
+      font-weight: 600;
+    }
   }
 
   &__toolbar {

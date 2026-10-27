@@ -1,9 +1,9 @@
 <script setup lang="ts">
 /**
  * 联赛看板视图:联赛平铺卡片墙 -> 单联赛看板
- * (基本信息 / 积分榜总榜 / 近期赛程与赛果)。
+ * (基本信息 / 积分榜总榜 / 近期赛程与赛果 / 多维度分析)。
  *
- * 数据来源:基础档案 + 球队基本面积分榜(数据采集页"同步基本面"写入)
+ * 数据来源:基础档案 + 球队基本面积分榜(数据采集页或本页"同步基本面"写入)
  * + 竞彩赛程;仅提供数据分析参考,不构成投注建议。
  */
 import { computed, onMounted, ref, watch } from 'vue'
@@ -15,6 +15,9 @@ import {
   type LeagueMatchRow,
   type LeagueStandingRow,
 } from '@/api/base/leagueDashboard'
+import { syncFundamentals } from '@/api/collector/league'
+import { syncLeagueTeamDashboards } from '@/api/collector/teamDashboard'
+import LeagueInsightsPanel from '@/components/league/LeagueInsightsPanel.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -24,6 +27,9 @@ const dashboard = ref<LeagueDashboard | null>(null)
 const isLoadingLeagues = ref(false)
 const isLoadingDashboard = ref(false)
 const error = ref<string | null>(null)
+
+/** 单联赛看板的当前选项卡:积分榜 / 多维度分析 */
+const activeTab = ref<'standings' | 'insights'>('standings')
 
 /** 最近一次发起的看板请求联赛 ID:过期响应(慢返回)直接丢弃 */
 let activeDashboardRequest: number | null = null
@@ -74,8 +80,9 @@ onMounted(async () => {
   }
 })
 
-// 路由参数变化(卡片墙 <-> 看板 / 看板间切换)时重拉
+// 路由参数变化(卡片墙 <-> 看板 / 看板间切换)时重拉,并回到积分榜选项卡
 watch(selectedLeagueId, (leagueId) => {
+  activeTab.value = 'standings'
   if (leagueId === null) {
     dashboard.value = null
     return
@@ -89,6 +96,84 @@ function handleSelect(league: League): void {
 
 function handleBack(): void {
   void router.push('/leagues')
+}
+
+// ---------- 同步基本面(当前联赛的球队积分榜) ----------
+
+const isSyncingFundamentals = ref(false)
+/** 本次同步所属的联赛:结果消息只在该联赛的看板下显示 */
+const syncTargetLeagueId = ref<number | null>(null)
+const syncMessage = ref<string | null>(null)
+const syncSkippedTeams = ref<string[]>([])
+const syncError = ref<string | null>(null)
+
+/** 同步结果是否属于当前正在浏览的联赛 */
+const syncResultVisible = computed(
+  () => syncTargetLeagueId.value !== null && syncTargetLeagueId.value === selectedLeagueId.value,
+)
+
+/** 按当前联赛名称同步球队基本面(积分榜),完成后刷新看板 */
+async function handleSyncFundamentals(): Promise<void> {
+  const leagueName = dashboard.value?.league.league_name
+  const leagueId = selectedLeagueId.value
+  if (leagueName === undefined || leagueId === null || isSyncingFundamentals.value) return
+  isSyncingFundamentals.value = true
+  syncTargetLeagueId.value = leagueId
+  syncMessage.value = null
+  syncSkippedTeams.value = []
+  syncError.value = null
+  try {
+    const result = await syncFundamentals(leagueName)
+    syncMessage.value =
+      `同步完成(${result.season} 赛季):球队 ${result.team_count} 支,` +
+      `新增 ${result.created_count} / 更新 ${result.updated_count}`
+    syncSkippedTeams.value = result.skipped_teams
+    await fetchDashboard(leagueId)
+  } catch (err) {
+    syncError.value = err instanceof Error ? err.message : '同步基本面失败'
+  } finally {
+    isSyncingFundamentals.value = false
+  }
+}
+
+// ---------- 批量同步看板(按联赛的本地球队名单,与基础档案页逻辑一致) ----------
+
+const isSyncingDashboards = ref(false)
+/** 本次同步所属的联赛:状态与结果只在该联赛的看板下显示 */
+const dashboardSyncTargetLeagueId = ref<number | null>(null)
+const dashboardSyncMessage = ref<string | null>(null)
+const dashboardSyncSkipped = ref<string[]>([])
+const dashboardSyncError = ref<string | null>(null)
+
+/** 看板同步结果是否属于当前正在浏览的联赛 */
+const dashboardSyncResultVisible = computed(
+  () =>
+    dashboardSyncTargetLeagueId.value !== null &&
+    dashboardSyncTargetLeagueId.value === selectedLeagueId.value,
+)
+
+/** 按当前联赛的本地球队名单逐队同步看板;单队失败计入跳过列表,完成后刷新看板 */
+async function handleSyncLeagueDashboards(): Promise<void> {
+  const leagueId = selectedLeagueId.value
+  if (leagueId === null || isSyncingDashboards.value) return
+  isSyncingDashboards.value = true
+  dashboardSyncTargetLeagueId.value = leagueId
+  dashboardSyncMessage.value = null
+  dashboardSyncSkipped.value = []
+  dashboardSyncError.value = null
+  try {
+    const result = await syncLeagueTeamDashboards({ league_id: leagueId })
+    dashboardSyncMessage.value =
+      `同步完成:球队 ${result.synced_count}/${result.team_count},` +
+      `未来赛事 ${result.future_count} 场,赛程赛果 ${result.result_count} 场` +
+      `(新增 ${result.created_count} / 更新 ${result.updated_count})`
+    dashboardSyncSkipped.value = result.skipped_teams
+    await fetchDashboard(leagueId)
+  } catch (err) {
+    dashboardSyncError.value = err instanceof Error ? err.message : '批量同步看板失败'
+  } finally {
+    isSyncingDashboards.value = false
+  }
 }
 
 function openMatch(matchId: string): void {
@@ -177,89 +262,177 @@ function rankClass(row: LeagueStandingRow): string {
             {{ dashboard.league.season }} 赛季 · 已入库 {{ dashboard.team_count }} 支球队
           </p>
         </div>
+        <div class="league-dashboard__sync-actions">
+          <button
+            class="league-dashboard__sync-btn"
+            type="button"
+            :disabled="dashboard === null || isSyncingFundamentals || isSyncingDashboards"
+            @click="handleSyncFundamentals"
+          >
+            {{ isSyncingFundamentals ? '同步中…' : '同步基本面' }}
+          </button>
+          <button
+            class="league-dashboard__sync-btn"
+            type="button"
+            :disabled="dashboard === null || isSyncingDashboards || isSyncingFundamentals"
+            @click="handleSyncLeagueDashboards"
+          >
+            {{ isSyncingDashboards ? '批量同步中…' : '批量同步看板' }}
+          </button>
+        </div>
       </header>
 
+      <p v-if="syncError && syncResultVisible" class="league-dashboard__error" role="alert">{{ syncError }}</p>
+      <p v-if="syncMessage && syncResultVisible" class="league-dashboard__sync-result" role="status">
+        {{ syncMessage }}<template v-if="syncSkippedTeams.length > 0">
+          ;跳过:{{ syncSkippedTeams.join('、') }}</template
+        >
+      </p>
+      <p
+        v-if="dashboardSyncError && dashboardSyncResultVisible"
+        class="league-dashboard__error"
+        role="alert"
+      >
+        {{ dashboardSyncError }}
+      </p>
+      <p
+        v-if="dashboardSyncMessage && dashboardSyncResultVisible"
+        class="league-dashboard__sync-result"
+        role="status"
+      >
+        {{ dashboardSyncMessage }}<template v-if="dashboardSyncSkipped.length > 0">
+          ;跳过:{{ dashboardSyncSkipped.join('、') }}</template
+        >
+      </p>
+
       <p v-if="error && dashboard === null" class="league-dashboard__error" role="alert">{{ error }}</p>
-      <!-- 切换联赛时保留旧数据,仅以提示标注加载状态 -->
-      <p v-if="isLoadingDashboard" class="league-dashboard__hint">看板数据加载中…</p>
 
-      <template v-if="dashboard !== null">
-        <h3 class="league-dashboard__section-title">积分榜(总榜)</h3>
-        <table class="league-dashboard__table">
-          <thead>
-            <tr>
-              <th>排名</th><th>球队</th><th>赛</th><th>胜</th><th>平</th><th>负</th>
-              <th>进/失</th><th>净胜</th><th>积分</th><th>胜率</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="row in dashboard.standings" :key="row.team_id">
-              <td :class="rankClass(row)">{{ row.ranking ?? '-' }}</td>
-              <td class="league-dashboard__team">{{ row.team_name }}</td>
-              <td>{{ row.played ?? '-' }}</td>
-              <td>{{ row.wins ?? '-' }}</td>
-              <td>{{ row.draws ?? '-' }}</td>
-              <td>{{ row.losses ?? '-' }}</td>
-              <td>{{ row.goals_for ?? '-' }} / {{ row.goals_against ?? '-' }}</td>
-              <td>{{ row.goal_diff ?? '-' }}</td>
-              <td class="league-dashboard__points">{{ row.points ?? '-' }}</td>
-              <td>{{ row.win_rate !== null ? `${row.win_rate.toFixed(0)}%` : '-' }}</td>
-            </tr>
-            <tr v-if="dashboard.standings.length === 0">
-              <td colspan="10" class="league-dashboard__empty">
-                该联赛暂无入库球队 · 请先在"数据采集"页同步球队清单
-              </td>
-            </tr>
-          </tbody>
-        </table>
-        <p class="league-dashboard__hint">
-          积分榜来自"数据采集"页同步的球队基本面(总榜);未同步的球队排末尾、战绩为空。
-        </p>
+      <div class="league-dashboard__tabs" role="tablist" aria-label="联赛看板视图切换">
+        <button
+          id="league-dashboard-tab-standings"
+          class="league-dashboard__tab"
+          :class="{ 'league-dashboard__tab--active': activeTab === 'standings' }"
+          type="button"
+          role="tab"
+          :aria-selected="activeTab === 'standings'"
+          aria-controls="league-dashboard-panel-standings"
+          @click="activeTab = 'standings'"
+        >
+          积分榜
+        </button>
+        <button
+          id="league-dashboard-tab-insights"
+          class="league-dashboard__tab"
+          :class="{ 'league-dashboard__tab--active': activeTab === 'insights' }"
+          type="button"
+          role="tab"
+          :aria-selected="activeTab === 'insights'"
+          aria-controls="league-dashboard-panel-insights"
+          @click="activeTab = 'insights'"
+        >
+          多维度分析
+        </button>
+      </div>
 
-        <div class="league-dashboard__matches">
-          <div class="league-dashboard__matches-col">
-            <h3 class="league-dashboard__section-title">近期赛程</h3>
-            <button
-              v-for="row in dashboard.upcoming_fixtures"
-              :key="row.match_id"
-              type="button"
-              class="league-dashboard__match"
-              @click="openMatch(row.match_id)"
-            >
-              <span class="league-dashboard__match-num">{{ row.match_num_str || '—' }}</span>
-              <span class="league-dashboard__match-time">{{ formatTime(row.match_time) }}</span>
-              <span class="league-dashboard__match-teams">
-                {{ row.home_team_name }} vs {{ row.away_team_name }}
-              </span>
-              <span class="league-dashboard__match-status">{{ statusLabel[row.match_status] ?? row.match_status }}</span>
-            </button>
-            <p v-if="dashboard.upcoming_fixtures.length === 0" class="league-dashboard__empty">
-              暂无近期赛程
-            </p>
+      <!-- 多维度分析选项卡(已完赛场次统计,独立拉取) -->
+      <div
+        v-if="activeTab === 'insights' && selectedLeagueId !== null"
+        id="league-dashboard-panel-insights"
+        role="tabpanel"
+        aria-labelledby="league-dashboard-tab-insights"
+      >
+        <LeagueInsightsPanel :league-id="selectedLeagueId" />
+      </div>
+
+      <!-- 积分榜选项卡 -->
+      <div
+        v-else
+        id="league-dashboard-panel-standings"
+        role="tabpanel"
+        aria-labelledby="league-dashboard-tab-standings"
+      >
+        <!-- 切换联赛时保留旧数据,仅以提示标注加载状态 -->
+        <p v-if="isLoadingDashboard" class="league-dashboard__hint">看板数据加载中…</p>
+
+        <template v-if="dashboard !== null">
+          <h3 class="league-dashboard__section-title">积分榜(总榜)</h3>
+          <table class="league-dashboard__table">
+            <thead>
+              <tr>
+                <th>排名</th><th>球队</th><th>赛</th><th>胜</th><th>平</th><th>负</th>
+                <th>进/失</th><th>净胜</th><th>积分</th><th>胜率</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="row in dashboard.standings" :key="row.team_id">
+                <td :class="rankClass(row)">{{ row.ranking ?? '-' }}</td>
+                <td class="league-dashboard__team">{{ row.team_name }}</td>
+                <td>{{ row.played ?? '-' }}</td>
+                <td>{{ row.wins ?? '-' }}</td>
+                <td>{{ row.draws ?? '-' }}</td>
+                <td>{{ row.losses ?? '-' }}</td>
+                <td>{{ row.goals_for ?? '-' }} / {{ row.goals_against ?? '-' }}</td>
+                <td>{{ row.goal_diff ?? '-' }}</td>
+                <td class="league-dashboard__points">{{ row.points ?? '-' }}</td>
+                <td>{{ row.win_rate !== null ? `${row.win_rate.toFixed(0)}%` : '-' }}</td>
+              </tr>
+              <tr v-if="dashboard.standings.length === 0">
+                <td colspan="10" class="league-dashboard__empty">
+                  该联赛暂无入库球队 · 请先在"数据采集"页同步球队清单
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <p class="league-dashboard__hint">
+            积分榜来自球队基本面(总榜),可通过页头"同步基本面"按钮或"数据采集"页更新;
+            未同步的球队排末尾、战绩为空。
+          </p>
+
+          <div class="league-dashboard__matches">
+            <div class="league-dashboard__matches-col">
+              <h3 class="league-dashboard__section-title">近期赛程</h3>
+              <button
+                v-for="row in dashboard.upcoming_fixtures"
+                :key="row.match_id"
+                type="button"
+                class="league-dashboard__match"
+                @click="openMatch(row.match_id)"
+              >
+                <span class="league-dashboard__match-num">{{ row.match_num_str || '—' }}</span>
+                <span class="league-dashboard__match-time">{{ formatTime(row.match_time) }}</span>
+                <span class="league-dashboard__match-teams">
+                  {{ row.home_team_name }} vs {{ row.away_team_name }}
+                </span>
+                <span class="league-dashboard__match-status">{{ statusLabel[row.match_status] ?? row.match_status }}</span>
+              </button>
+              <p v-if="dashboard.upcoming_fixtures.length === 0" class="league-dashboard__empty">
+                暂无近期赛程
+              </p>
+            </div>
+
+            <div class="league-dashboard__matches-col">
+              <h3 class="league-dashboard__section-title">近期赛果</h3>
+              <button
+                v-for="row in dashboard.recent_results"
+                :key="row.match_id"
+                type="button"
+                class="league-dashboard__match"
+                @click="openMatch(row.match_id)"
+              >
+                <span class="league-dashboard__match-num">{{ row.match_num_str || '—' }}</span>
+                <span class="league-dashboard__match-time">{{ formatTime(row.match_time) }}</span>
+                <span class="league-dashboard__match-teams">
+                  {{ row.home_team_name }} vs {{ row.away_team_name }}
+                </span>
+                <span class="league-dashboard__match-score">{{ formatScore(row) }}</span>
+              </button>
+              <p v-if="dashboard.recent_results.length === 0" class="league-dashboard__empty">
+                暂无近期赛果
+              </p>
+            </div>
           </div>
-
-          <div class="league-dashboard__matches-col">
-            <h3 class="league-dashboard__section-title">近期赛果</h3>
-            <button
-              v-for="row in dashboard.recent_results"
-              :key="row.match_id"
-              type="button"
-              class="league-dashboard__match"
-              @click="openMatch(row.match_id)"
-            >
-              <span class="league-dashboard__match-num">{{ row.match_num_str || '—' }}</span>
-              <span class="league-dashboard__match-time">{{ formatTime(row.match_time) }}</span>
-              <span class="league-dashboard__match-teams">
-                {{ row.home_team_name }} vs {{ row.away_team_name }}
-              </span>
-              <span class="league-dashboard__match-score">{{ formatScore(row) }}</span>
-            </button>
-            <p v-if="dashboard.recent_results.length === 0" class="league-dashboard__empty">
-              暂无近期赛果
-            </p>
-          </div>
-        </div>
-      </template>
+        </template>
+      </div>
 
       <p class="league-dashboard__footer">
         点击赛程/赛果行进入比赛详情;数据仅用于分析参考,不构成投注建议。
@@ -296,6 +469,40 @@ function rankClass(row: LeagueStandingRow): string {
     gap: vars.$spacing-xs;
   }
 
+  &__sync-actions {
+    display: flex;
+    align-items: center;
+    gap: vars.$spacing-sm;
+    margin-left: auto;
+  }
+
+  &__sync-btn {
+    padding: vars.$spacing-xs vars.$spacing-md;
+    border: none;
+    border-radius: vars.$border-radius;
+    background: vars.$color-primary;
+    color: #fff;
+    font-size: vars.$font-size-sm;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: opacity 0.2s;
+
+    &:hover:not(:disabled) {
+      opacity: 0.9;
+    }
+
+    &:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+  }
+
+  &__sync-result {
+    margin: vars.$spacing-sm 0;
+    font-size: vars.$font-size-sm;
+    color: vars.$color-primary;
+  }
+
   &__title {
     margin: 0;
   }
@@ -317,6 +524,38 @@ function rankClass(row: LeagueStandingRow): string {
     &:hover {
       color: vars.$color-primary;
       border-color: vars.$color-primary;
+    }
+  }
+
+  // ---------- 选项卡 ----------
+
+  &__tabs {
+    display: flex;
+    gap: vars.$spacing-sm;
+    margin-bottom: vars.$spacing-md;
+    border-bottom: 2px solid vars.$color-border;
+  }
+
+  &__tab {
+    padding: vars.$spacing-sm vars.$spacing-lg;
+    border: none;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -2px;
+    background: transparent;
+    color: vars.$color-text-secondary;
+    font-size: vars.$font-size-md;
+    font-weight: 500;
+    cursor: pointer;
+    transition: color 0.15s ease, border-color 0.15s ease;
+
+    &:hover {
+      color: vars.$color-primary;
+    }
+
+    &--active {
+      border-bottom-color: vars.$color-primary;
+      color: vars.$color-primary;
+      font-weight: 600;
     }
   }
 

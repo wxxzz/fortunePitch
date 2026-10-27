@@ -300,7 +300,7 @@ onMounted(() => {
   &__hit-stats {
     margin-left: vars.$spacing-sm;
     font-weight: 600;
-    color: vars.$color-positive;
+    color: vars.$color-primary;
   }
 
   &__table-wrap {
@@ -353,7 +353,7 @@ onMounted(() => {
   }
 
   &__hit {
-    color: vars.$color-positive;
+    color: vars.$color-primary;
     font-weight: 600;
     white-space: nowrap;
   }

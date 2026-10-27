@@ -245,6 +245,59 @@ class LeagueDashboardRead(BaseModel):
     )
 
 
+# ---------- 联赛多维度分析 ----------
+
+
+class LabelCountRead(BaseModel):
+    """有限标签分布行(如半全场的"胜胜"、总进球的"5+")。"""
+
+    label: str
+    count: int
+
+
+class LeagueFavoriteStatsRead(BaseModel):
+    """热门命中统计:每场取胜平负 SP 最低项为热门,统计其开奖命中。"""
+
+    count: int = Field(description="参与统计的场次数(三项 SP 齐全)")
+    hit_count: int = Field(description="热门选项最终开奖命中场次数")
+    hit_rate: float | None = Field(default=None, description="命中率(0~1)")
+    avg_sp: float | None = Field(default=None, description="热门项平均 SP")
+
+
+class LeagueInsightsRead(BaseModel):
+    """联赛多维度分析响应:对已完赛场次的结果分布统计。"""
+
+    league_id: int
+    league_name: str
+    season: str = Field(description="当前赛季标识")
+    finished_count: int = Field(description="已完赛且有比分的场次数")
+    home_win: int = Field(description="主胜场次数")
+    draw: int = Field(description="平局场次数")
+    away_win: int = Field(description="客胜场次数")
+    home_win_rate: float | None = Field(default=None, description="主胜占比(0~1)")
+    draw_rate: float | None = Field(default=None, description="平局占比(0~1)")
+    away_win_rate: float | None = Field(default=None, description="客胜占比(0~1)")
+    avg_total_goals: float | None = Field(default=None, description="场均总进球")
+    avg_home_goals: float | None = Field(default=None, description="主队场均进球")
+    avg_away_goals: float | None = Field(default=None, description="客队场均进球")
+    over2_5_count: int = Field(description="总进球 >= 3 的场次数")
+    over2_5_rate: float | None = Field(default=None, description="3 球及以上占比(0~1)")
+    btts_count: int = Field(description="主客队均取得进球的场次数")
+    btts_rate: float | None = Field(default=None, description="双方进球占比(0~1)")
+    total_goals: list[LabelCountRead] = Field(
+        description="总进球分布(0/1/2/3/4/5+,固定顺序)"
+    )
+    half_full: list[LabelCountRead] = Field(
+        description="半全场分布(按出现次数降序)"
+    )
+    handicap: list[LabelCountRead] = Field(
+        description="让球胜平负分布(固定顺序,仅非零项)"
+    )
+    favorite: LeagueFavoriteStatsRead | None = Field(
+        default=None, description="热门命中统计(无 SP 数据时为空)"
+    )
+
+
 # ---------- 大模型球队维度分析 ----------
 
 

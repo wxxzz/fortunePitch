@@ -10,6 +10,7 @@ from sqlalchemy.orm import selectinload
 from app.api.v1.match.schemas import (
     LlmAnalysisRead,
     LlmFundamentalAnalysisRead,
+    LlmLessonSummaryRead,
     LlmRecommendationRowRead,
     LlmRetrospectComparisonItemRead,
     LlmRetrospectRead,
@@ -33,8 +34,10 @@ from app.core.database import get_db_session
 from app.core.exceptions import DataValidationError, ResourceNotFoundError
 from app.core.security import verify_api_key
 from app.models import (
+    LlmRequestLog,
     MatchEvent,
     MatchGame,
+    MatchLlmLessonSummary,
     MatchOdds,
     MatchOddsSnapshot,
     MatchStatus,
@@ -44,6 +47,7 @@ from app.services import (
     insights,
     llm,
     llm_fundamental,
+    llm_lessons,
     llm_odds_trend,
     llm_query,
     llm_retrospect,
@@ -615,6 +619,82 @@ async def generate_llm_retrospect(
     result = await llm_retrospect.analyze_retrospect(context)
     saved = await llm_retrospect.save_retrospect(session, result, context)
     return LlmRetrospectRead.model_validate(saved)
+
+
+# ---------- 大模型复盘经验总结 /llm-lesson-summaries ----------
+
+
+@router.get(
+    "/llm-lesson-summaries",
+    response_model=list[LlmLessonSummaryRead],
+    summary="查询 AI 复盘经验总结历史",
+)
+async def list_llm_lesson_summaries(
+    limit: int = Query(default=20, ge=1, le=100),
+    session: AsyncSession = Depends(get_db_session),
+) -> list[LlmLessonSummaryRead]:
+    """查询复盘经验总结历史,按生成时间倒序。
+
+    每次总结一行(总结段落 + 共性经验条目 + 输入复盘统计),
+    最近一次会注入后续 AI 综合分析的提示词。
+    """
+    return [
+        LlmLessonSummaryRead.model_validate(row)
+        for row in await llm_lessons.list_lesson_summaries(session, limit=limit)
+    ]
+
+
+@router.post(
+    "/llm-lesson-summaries",
+    response_model=LlmLessonSummaryRead,
+    summary="生成 AI 复盘经验总结(归纳各场复盘的共性经验)",
+)
+async def generate_llm_lesson_summary(
+    session: AsyncSession = Depends(get_db_session),
+) -> LlmLessonSummaryRead:
+    """调用大模型对各场 AI 复盘做共性归纳,输出可复用的分析方法经验。
+
+    流程:取每场比赛最近一次赛事复盘(重新生成过复盘的场次不重复计),
+    按生成时间倒序取最近 30 场,把各场总结与经验教训作为归纳上下文
+    构造提示词,调用 OpenAI 兼容接口输出归纳总结与共性经验(5~10 条);
+    每次生成保存一条历史记录(fp_match_llm_lesson_summaries),调用
+    过程写入请求日志表(analysis_type=lesson_summary)并以 log_id 关联。
+    最近一次总结由综合分析自动注入提示词,用于校准分析方法。
+    经验总结仅供改进分析方法参考,不构成投注建议。
+
+    Raises:
+        DataValidationError: 尚无任何已生成的 AI 复盘(422)。
+        LlmNotConfiguredError: 未配置 LLM API Key(503)。
+        LlmServiceError: 大模型调用或输出解析失败(502)。
+    """
+    context = await llm_lessons.build_lesson_context(session)
+    result = await llm_lessons.analyze_lessons(context)
+    saved = await llm_lessons.save_lesson_summary(session, result)
+    return LlmLessonSummaryRead.model_validate(saved)
+
+
+@router.get(
+    "/llm-lesson-summaries/{summary_id}/request-log",
+    response_model=LlmRequestLogRead,
+    summary="查询某次经验总结的请求日志(输入输出内容)",
+)
+async def get_llm_lesson_summary_log(
+    summary_id: int, session: AsyncSession = Depends(get_db_session)
+) -> LlmRequestLogRead:
+    """查询某次经验总结的完整请求日志,供查看该次总结的输入(提示词)与输出(模型原始响应)。
+
+    Raises:
+        ResourceNotFoundError: 总结记录不存在 / 该次总结没有关联日志。
+    """
+    summary_row = await session.get(MatchLlmLessonSummary, summary_id)
+    if summary_row is None:
+        raise ResourceNotFoundError(MatchLlmLessonSummary.__tablename__, summary_id)
+    if summary_row.log_id is None:
+        raise ResourceNotFoundError("经验总结关联的请求日志", summary_id)
+    log_row = await session.get(LlmRequestLog, summary_row.log_id)
+    if log_row is None:
+        raise ResourceNotFoundError("经验总结关联的请求日志", summary_row.log_id)
+    return LlmRequestLogRead.model_validate(log_row)
 
 
 # ---------- 赛果开奖 /results ----------

@@ -481,3 +481,40 @@ class MatchLlmRetrospectItem(Base):
     retrospect: Mapped["MatchLlmRetrospect"] = relationship(
         back_populates="items"
     )
+
+
+class MatchLlmLessonSummary(Base):
+    """大模型复盘经验总结表(fp_match_llm_lesson_summaries):每次总结一行,保留历史。
+
+    由 AI 分析结果页「AI 复盘总结」手动触发生成:取每场比赛最近一次
+    赛事复盘,把各场总结与经验教训交给大模型做共性归纳,输出跨场次
+    可复用的分析方法经验;最近一次总结由 llm 服务注入后续 AI 综合分析
+    的提示词,用于校准分析方法。本次总结的请求日志(完整提示词与模型
+    原始输出)经 log_id 关联 fp_llm_request_logs,日志写入失败时为
+    NULL,不影响总结保留。
+    """
+
+    __tablename__ = "fp_match_llm_lesson_summaries"
+
+    summary_id: Mapped[int] = mapped_column(
+        BigIntPK, primary_key=True, autoincrement=True
+    )
+    provider: Mapped[str] = mapped_column(String(16), nullable=False)
+    model: Mapped[str] = mapped_column(String(64), nullable=False)
+    # 经验归纳总结(输入复盘的整体命中水平与共性偏差)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    # 归纳后的共性经验(5~10 条,指向可改进的分析方法)
+    lessons: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    # 本次总结输入覆盖的复盘场次数(每场取最近一次复盘)
+    retrospect_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # 输入复盘的合计命中统计(已开奖玩法口径)
+    total_hit: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_decided: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # 本次总结的请求日志 ID(独立会话写入,写失败为 NULL)
+    log_id: Mapped[int | None] = mapped_column(
+        ForeignKey("fp_llm_request_logs.log_id"), nullable=True, index=True
+    )
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=datetime.datetime.now
+    )
+

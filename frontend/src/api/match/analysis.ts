@@ -280,3 +280,53 @@ export async function runLlmRetrospect(matchId: string): Promise<LlmRetrospect> 
   )
   return data
 }
+
+/** AI 复盘经验总结(归纳各场复盘的共性经验,供后续综合分析参考) */
+export interface LlmLessonSummary {
+  summary_id: number
+  provider: string
+  model: string
+  /** 经验归纳总结 */
+  summary: string
+  /** 共性经验条目(5~10 条) */
+  lessons: string[]
+  /** 本次总结输入覆盖的复盘场次数 */
+  retrospect_count: number
+  /** 输入复盘的合计命中数(已开奖玩法口径) */
+  total_hit: number
+  total_decided: number
+  /** 本次总结的请求日志 ID(日志写失败为 null) */
+  log_id: number | null
+  created_at: string
+}
+
+/** 查询 AI 复盘经验总结历史(按生成时间倒序) */
+export async function listLlmLessonSummaries(
+  limit = 20,
+): Promise<LlmLessonSummary[]> {
+  const { data } = await request.get<LlmLessonSummary[]>(
+    '/api/v1/match/llm-lesson-summaries',
+    { params: { limit } },
+  )
+  return data
+}
+
+/** 调用大模型归纳各场 AI 复盘的共性经验并保存(手动触发) */
+export async function runLlmLessonSummary(): Promise<LlmLessonSummary> {
+  const { data } = await request.post<LlmLessonSummary>(
+    '/api/v1/match/llm-lesson-summaries',
+    undefined,
+    { timeout: LLM_TIMEOUT_MS },
+  )
+  return data
+}
+
+/** 查询某次经验总结的请求日志(该次总结的输入提示词与模型原始响应) */
+export async function getLlmLessonSummaryLog(
+  summaryId: number,
+): Promise<LlmRequestLog> {
+  const { data } = await request.get<LlmRequestLog>(
+    `/api/v1/match/llm-lesson-summaries/${summaryId}/request-log`,
+  )
+  return data
+}

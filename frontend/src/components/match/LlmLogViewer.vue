@@ -28,6 +28,7 @@ const ANALYSIS_TYPE_LABELS: Record<string, string> = {
   odds_trend: 'AI 赔率走势分析',
   retrospect: 'AI 赛事复盘',
   team: '球队维度分析',
+  lesson_summary: 'AI 复盘经验总结',
 }
 
 function typeLabel(log: LlmRequestLog): string {

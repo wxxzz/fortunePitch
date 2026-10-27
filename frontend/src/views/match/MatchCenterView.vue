@@ -57,6 +57,15 @@ const teamLeagueName = computed(() => {
   return map
 })
 
+/** 球队 ID -> 联赛档案 ID(赛事卡片联赛名点击跳转联赛看板用) */
+const teamLeagueId = computed(() => {
+  const map = new Map<number, number>()
+  for (const team of teams.value) {
+    map.set(team.team_id, team.league_id)
+  }
+  return map
+})
+
 /** 应用筛选后的比赛列表(默认按场次编号升序,编号缺失时按开赛时间兜底) */
 const filteredGames = computed(() =>
   games.value
@@ -329,6 +338,7 @@ function handleConfirmSuccess(betCount: number): void {
           :key="game.match_id"
           :game="game"
           :league-name="teamLeagueName.get(game.home_team_id) ?? ''"
+          :league-id="teamLeagueId.get(game.home_team_id) ?? null"
           :home-name="teamName(game.home_team_id)"
           :away-name="teamName(game.away_team_id)"
           @open-detail="handleOpenDetail"

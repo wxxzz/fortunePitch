@@ -12,6 +12,8 @@ import { useSelectionStore } from '@/stores/selection'
 const props = defineProps<{
   game: MatchGame
   leagueName: string
+  /** 联赛档案 ID(缺省时联赛名不可点击) */
+  leagueId: number | null
   homeName: string
   awayName: string
 }>()
@@ -28,6 +30,11 @@ const { isSelected } = selectionStore
 /** 点击球队名称进入球队看板页 */
 function openTeamDashboard(teamId: number): void {
   void router.push(`/base/team-dashboard/${teamId}`)
+}
+
+/** 点击联赛名称进入联赛看板页 */
+function openLeagueDashboard(leagueId: number): void {
+  void router.push(`/leagues/${leagueId}`)
 }
 
 const statusLabel: Record<string, string> = {
@@ -83,7 +90,16 @@ function isSelectedOption(optionCode: string): boolean {
     <!-- 渐变头部:联赛/编号/时间/状态 + 对阵 -->
     <header class="odds-card__header">
       <div class="odds-card__meta">
-        <span class="odds-card__league">{{ leagueName || '未知联赛' }}</span>
+        <button
+          v-if="leagueId !== null"
+          class="odds-card__league-btn"
+          type="button"
+          :title="`${leagueName} 联赛看板`"
+          @click="openLeagueDashboard(leagueId)"
+        >
+          {{ leagueName || '未知联赛' }}
+        </button>
+        <span v-else class="odds-card__league">{{ leagueName || '未知联赛' }}</span>
         <span class="odds-card__num">
           {{ game.match_num_str || `编号 ${game.match_id}` }}
         </span>
@@ -187,6 +203,25 @@ function isSelectedOption(optionCode: string): boolean {
 
   &__league {
     font-weight: 600;
+  }
+
+  &__league-btn {
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: inherit;
+    font-size: inherit;
+    font-weight: 600;
+    cursor: pointer;
+    transition: text-decoration-color 0.2s;
+    // 悬停显示下划线提示可点击进入联赛看板
+    text-decoration: underline;
+    text-decoration-color: transparent;
+
+    &:hover,
+    &:focus-visible {
+      text-decoration-color: rgba(255, 255, 255, 0.85);
+    }
   }
 
   &__num {

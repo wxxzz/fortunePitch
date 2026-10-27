@@ -34,6 +34,7 @@ from app.models import (
     MatchGame,
     MatchLlmAnalysis,
     MatchLlmFundAnalysis,
+    MatchLlmLessonSummary,
     MatchLlmPlayRec,
     MatchLlmTrendAnalysis,
     MatchStatus,
@@ -108,6 +109,9 @@ class MatchAnalysisContext:
     # 人工录入补充信息文本块(伤停/阵型等,由深度分析页"其他信息"Tab
     # 保存;未录入或全空为 None,不注入提示词)
     extra_info_text: str | None = None
+    # 历史复盘经验总结的共性经验条目(由 AI 分析结果页"AI 复盘总结"
+    # 手动生成;从未生成过为 None,不注入提示词)
+    lessons: list[str] | None = None
 
 
 class LlmPlayRecommendation(BaseModel):
@@ -223,6 +227,14 @@ async def build_match_analysis_context(
         logger.warning("补充信息读取失败,跳过该证据段", exc_info=True)
         extra_info_text = None
 
+    # 历史复盘经验总结(最近一次):查询失败只降级,不阻断主分析
+    try:
+        lesson_row = await get_latest_lesson_summary(session)
+        lessons = list(lesson_row.lessons) if lesson_row is not None else None
+    except Exception:
+        logger.warning("复盘经验总结读取失败,跳过该参考段", exc_info=True)
+        lessons = None
+
     return MatchAnalysisContext(
         match_id=game.match_id,
         league_name=game.league.league_name,
@@ -238,6 +250,7 @@ async def build_match_analysis_context(
         trend_analysis=trend_analysis,
         insights_text=insights_text,
         extra_info_text=extra_info_text,
+        lessons=lessons,
     )
 
 
@@ -322,6 +335,9 @@ def build_analysis_messages(context: MatchAnalysisContext) -> list[dict[str, str
         "   系统数据交叉校验后再采信,存在矛盾时以系统数据为准并在理由中说明。\n"
         "3. 赔率隐含概率 = 1/赔率;可将各选项隐含概率归一后,与基本面强弱对照,判断分歧点。\n"
         "4. 数据缺失时(如某队未同步基本面)必须明确说明数据不足,并压低对应玩法置信度。\n"
+        "5. 若提供【历史复盘经验总结】,将其作为分析方法的校准参考(如置信度水平、玩法倾向),\n"
+        "   但必须结合当前比赛数据独立判断,与当前证据冲突时以当前数据为准并在理由中说明,\n"
+        "   不得机械套用历史经验。\n"
         "\n"
         "证据权重(综合研判按以下权重融合各路证据后得出最终结论):\n"
         f"- 自身对原始数据的独立推理,合计 {_WEIGHT_OWN_FUNDAMENTAL + _WEIGHT_OWN_ODDS:.0%}:\n"
@@ -369,6 +385,20 @@ def build_analysis_messages(context: MatchAnalysisContext) -> list[dict[str, str
         if context.extra_info_text
         else ""
     )
+    # 历史复盘经验总结段(基于既往复盘归纳的分析方法经验):从未生成过不注入
+    lessons_section = (
+        (
+            f"\n"
+            f"【历史复盘经验总结(基于既往复盘归纳,供分析方法参考)】\n"
+            + "\n".join(
+                f"{index}. {lesson}"
+                for index, lesson in enumerate(context.lessons, start=1)
+            )
+            + "\n"
+        )
+        if context.lessons
+        else ""
+    )
     user_prompt = (
         f"请分析以下竞彩比赛并输出分玩法推荐方案:\n"
         f"\n"
@@ -399,6 +429,7 @@ def build_analysis_messages(context: MatchAnalysisContext) -> list[dict[str, str
         f"\n"
         f"【AI 赔率走势分析结论(历史生成,综合分析参考依据)】\n"
         f"{_format_trend_conclusion(context.trend_analysis)}"
+        f"{lessons_section}"
     )
     return [
         {"role": "system", "content": system_prompt},
@@ -549,13 +580,14 @@ async def _write_request_log(
     status: str,
     duration_ms: int,
     error: LlmServiceError | None,
-) -> None:
-    """落一条大模型请求日志(独立会话写入并提交)。
+) -> int | None:
+    """落一条大模型请求日志(独立会话写入并提交),返回日志 ID。
 
     只依赖 match_id 字符串,不依赖具体分析上下文类型,
     供分玩法推荐(llm)与基本面分析(llm_fundamental)共用。
     日志失败只记录 warning,绝不影响主流程 —— 请求日志的意义
-    正是在业务请求失败(事务回滚)时也能留存调用痕迹。
+    正是在业务请求失败(事务回滚)时也能留存调用痕迹;
+    失败时返回 None,由需要关联日志的业务(如复盘经验总结)自行容错。
     """
     log_row = LlmRequestLog(
         match_id=match_id,
@@ -580,8 +612,10 @@ async def _write_request_log(
         async with _log_session_factory() as log_session:
             log_session.add(log_row)
             await log_session.commit()
+        return log_row.log_id
     except Exception:
         logger.warning("大模型请求日志写入失败", exc_info=True)
+        return None
 
 
 async def analyze_match(context: MatchAnalysisContext) -> LlmAnalysis:
@@ -682,6 +716,22 @@ async def get_latest_analysis(session: AsyncSession, match_id: str) -> MatchLlmA
         .options(selectinload(MatchLlmAnalysis.plays))
         .where(MatchLlmAnalysis.match_id == match_id)
         .order_by(MatchLlmAnalysis.analysis_id.desc())
+        .limit(1)
+    )
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def get_latest_lesson_summary(
+    session: AsyncSession,
+) -> MatchLlmLessonSummary | None:
+    """查询最近一次复盘经验总结,无记录返回 None。
+
+    直接查模型不经 llm_lessons 服务,避免服务间循环依赖;
+    综合分析上下文聚合时取其 lessons 注入提示词。
+    """
+    stmt = (
+        select(MatchLlmLessonSummary)
+        .order_by(MatchLlmLessonSummary.summary_id.desc())
         .limit(1)
     )
     return (await session.execute(stmt)).scalar_one_or_none()
