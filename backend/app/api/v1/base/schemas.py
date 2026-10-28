@@ -287,6 +287,9 @@ class LeagueInsightsRead(BaseModel):
     total_goals: list[LabelCountRead] = Field(
         description="总进球分布(0/1/2/3/4/5+,固定顺序)"
     )
+    score_distribution: list[LabelCountRead] = Field(
+        description="比分分布(全场比分标签,按出现次数降序、同频按标签升序)"
+    )
     half_full: list[LabelCountRead] = Field(
         description="半全场分布(按出现次数降序)"
     )

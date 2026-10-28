@@ -155,8 +155,8 @@ async def get_league_insights(
     """联赛多维度分析:对已完赛场次统计多维度分布。
 
     维度:胜平负分布、进球(场均/3 球及以上/双方进球)、总进球分布、
-    半全场分布、让球胜平负分布、热门命中(胜平负 SP 最低项的开奖
-    命中率)。统计口径为该联赛全部已完赛且有比分的场次(不限赛季)。
+    比分分布、半全场分布、让球胜平负分布、热门命中(胜平负 SP 最低项
+    的开奖命中率)。统计口径为该联赛全部已完赛且有比分的场次(不限赛季)。
 
     Raises:
         ResourceNotFoundError: 联赛不存在。
@@ -193,6 +193,10 @@ async def get_league_insights(
         total_goals=[
             LabelCountRead(label=row.label, count=row.count)
             for row in data.total_goals
+        ],
+        score_distribution=[
+            LabelCountRead(label=row.label, count=row.count)
+            for row in data.score_distribution
         ],
         half_full=[
             LabelCountRead(label=row.label, count=row.count)

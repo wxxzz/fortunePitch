@@ -28,6 +28,12 @@ export interface MatchResultItem {
   sp_h: number | null
   sp_d: number | null
   sp_a: number | null
+  /** 各玩法中奖选项的开奖赔率(胜平负优先赛果 SP,其余取在售赔率池) */
+  had_sp: number | null
+  hhad_sp: number | null
+  crs_sp: number | null
+  ttg_sp: number | null
+  hafu_sp: number | null
   /** 开奖状态,如 Payout=已开奖 */
   pool_status: string
 }

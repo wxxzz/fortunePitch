@@ -1,6 +1,7 @@
 """比赛与赛果模块路由:fp_match_ 表的增删查接口。"""
 
 import datetime
+import typing
 
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy import select
@@ -52,6 +53,7 @@ from app.services import (
     llm_query,
     llm_retrospect,
     match_extra_info,
+    settlement,
 )
 
 router = APIRouter(prefix="/match", tags=["match"], dependencies=[Depends(verify_api_key)])
@@ -709,13 +711,26 @@ async def list_results(
     end_date: datetime.date = Query(description="售卖日止(含,YYYY-MM-DD)"),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[MatchResultRead]:
-    """查询指定售卖日范围的赛果开奖列表(含各玩法开奖结果与 SP)。
+    """查询指定售卖日范围的赛果开奖列表(含各玩法开奖结果、SP 与中奖赔率)。
 
     按比赛的竞彩售卖日(fp_match_games.business_date)过滤,次日凌晨开赛的
     比赛归属前一售卖日;跨多日时按售卖日 + 场次编号排序。数据由采集模块的
     赛果同步写入,未同步的日期返回空列表。
+
+    各玩法中奖选项的开奖赔率(如比分 5:2@100)由在售赔率池比对推导,
+    胜平负优先取赛果记录的开奖 SP。
     """
     pairs = await result_sync.list_results_by_business_date(session, start_date, end_date)
+    # 批量加载在售赔率池,逐场解析各玩法中奖选项赔率
+    match_ids = [result.match_id for result, _ in pairs]
+    pools_by_match: dict[str, list[dict[str, typing.Any]]] = {}
+    if match_ids:
+        odds_rows = (
+            await session.execute(
+                select(MatchOdds).where(MatchOdds.match_id.in_(match_ids))
+            )
+        ).scalars().all()
+        pools_by_match = {row.match_id: row.pools for row in odds_rows}
     return [
         MatchResultRead(
             match_id=result.match_id,
@@ -744,6 +759,9 @@ async def list_results(
             sp_h=result.sp_h,
             sp_d=result.sp_d,
             sp_a=result.sp_a,
+            **settlement.resolve_result_play_odds(
+                result, pools_by_match.get(result.match_id)
+            ),
             pool_status=result.pool_status,
         )
         for result, game in pairs

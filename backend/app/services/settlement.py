@@ -65,6 +65,9 @@ _CRS_RE = re.compile(r"^s(\d{2})s(\d{2})$")
 # HAD 赛果 SP 字段按选项编码映射
 _HAD_SP_FIELD = {"h": "sp_h", "d": "sp_d", "a": "sp_a"}
 
+# 胜平负展示名 -> 选项编码(反查;胜平负的中奖选项可由开奖标签直接得出)
+_WDL_LABEL_TO_CODE = {label: code for code, label in _WDL_CODES.items()}
+
 
 class SettlementResult(typing.NamedTuple):
     """一次结算的汇总计数。"""
@@ -176,6 +179,101 @@ def resolve_payout_odds(
     except (TypeError, ValueError):
         return None
     return value if value > 0 else None
+
+
+# 比分开奖结果正则(如 "1:2"),高比分不在常规选项内时用于判定"胜/平/负其他"
+_CRS_RESULT_RE = re.compile(r"^(\d+):(\d+)$")
+
+# 高比分的"其他"选项编码,按胜/平/负方向映射
+_CRS_SPECIAL_BY_OUTCOME = {"H": "s1sh", "D": "s1sd", "A": "s1sa"}
+
+
+def _winning_option_code(
+    play_code: str,
+    result_label: str,
+    pool: dict[str, typing.Any],
+) -> str | None:
+    """在赔率池中找出该玩法中奖选项的编码。
+
+    逐选项将展示名与开奖结果比对(复用 resolve_option_hit 的归一化与
+    总进球 "7+" 特例);比分玩法中超出常规选项的高比分命中"胜/平/负其他"。
+
+    Args:
+        play_code: 玩法编码(HAD/HHAD/CRS/TTG/HAFU)。
+        result_label: 该玩法的开奖结果标签(如 "客胜"/"5:2")。
+        pool: 归一化玩法字典(poolCode/options)。
+
+    Returns:
+        中奖选项编码;未命中时为 None。
+    """
+    options = [o for o in pool.get("options") or [] if isinstance(o, dict)]
+    for option in options:
+        option_code = str(option.get("code") or "")
+        option_label = resolve_option_label(play_code, option_code)
+        if option_label and resolve_option_hit(play_code, option_label, result_label):
+            return option_code
+    if play_code == "CRS":
+        matched = _CRS_RESULT_RE.match(result_label)
+        if matched:
+            home, away = int(matched.group(1)), int(matched.group(2))
+            special = _CRS_SPECIAL_BY_OUTCOME.get(
+                "H" if home > away else ("D" if home == away else "A")
+            )
+            if special and any(
+                str(o.get("code") or "") == special for o in options
+            ):
+                return special
+    return None
+
+
+def resolve_result_play_odds(
+    result: MatchResult,
+    pools: list[dict[str, typing.Any]] | None,
+) -> dict[str, float | None]:
+    """解析赛果各玩法中奖选项的开奖赔率(开奖页展示口径)。
+
+    逐玩法将开奖结果标签与在售赔率池比对,中奖选项的赔率即该玩法
+    赛果赔率(如比分 "5:2@100")。胜平负的中奖选项可由开奖标签直接
+    反查,赔率优先取赛果记录的开奖 SP(与结算口径一致),无赔率池
+    也能解析;其余玩法依赖在售赔率池。未开奖或赔率不可解析为 None。
+
+    Args:
+        result: 赛果记录。
+        pools: fp_match_odds.pools 当前在售玩法列表(可为 None)。
+
+    Returns:
+        各玩法中奖选项赔率字典:had_sp/hhad_sp/crs_sp/ttg_sp/hafu_sp
+        (键与 MatchResultRead 的展示字段一致,可直接展开构造)。
+    """
+    play_odds: dict[str, float | None] = {
+        f"{field}_sp": None for field in RESULT_FIELD_BY_PLAY.values()
+    }
+    for play_code, field in RESULT_FIELD_BY_PLAY.items():
+        result_label = getattr(result, field)
+        if not result_label:
+            continue
+        pool = next(
+            (
+                p
+                for p in (pools or [])
+                if isinstance(p, dict) and p.get("poolCode") == play_code
+            ),
+            None,
+        )
+        option_code = None
+        if pool is not None:
+            option_code = _winning_option_code(play_code, result_label, pool)
+        elif play_code == "HAD":
+            # 胜平负的中奖选项可由开奖标签直接反查,无需赔率池
+            # (赔率优先取赛果 SP,赔率池缺失时仍可展示)
+            option_code = _WDL_LABEL_TO_CODE.get(
+                _normalize_play_label("HAD", result_label)
+            )
+        if option_code is not None:
+            play_odds[f"{field}_sp"] = resolve_payout_odds(
+                play_code, option_code, result, pools
+            )
+    return play_odds
 
 
 async def _load_results(

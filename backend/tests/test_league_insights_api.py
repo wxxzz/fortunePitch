@@ -245,6 +245,13 @@ class TestLeagueInsightsEndpoint:
             ("0", 0), ("1", 0), ("2", 2), ("3", 1), ("4", 0), ("5+", 0),
         ]
 
+        # 比分分布(次数降序,同频按标签升序):0:2 / 1:1 / 2:1
+        assert [
+            (row["label"], row["count"]) for row in body["score_distribution"]
+        ] == [
+            ("0:2", 1), ("1:1", 1), ("2:1", 1),
+        ]
+
         # 半全场分布(次数降序,同频按标签升序):平平 / 平负 / 胜胜
         assert [(row["label"], row["count"]) for row in body["half_full"]] == [
             ("平平", 1), ("平负", 1), ("胜胜", 1),
@@ -289,7 +296,38 @@ class TestLeagueInsightsEndpoint:
         assert body["btts_rate"] is None
         assert body["half_full"] == []
         assert body["handicap"] == []
+        assert body["score_distribution"] == []
         assert body["favorite"] is None
+
+    async def test_score_distribution_orders_by_count_desc(
+        self, env: tuple[AsyncClient, async_sessionmaker]
+    ) -> None:
+        """比分分布:按出现次数降序,同频按标签升序。"""
+        client, session_factory = env
+        async with session_factory() as session:
+            liga = League(league_name="意大利甲级联赛", country="意大利", tier=1)
+            session.add(liga)
+            await session.flush()
+            inter = Team(team_name="国际米兰", league_id=liga.league_id)
+            milan = Team(team_name="AC米兰", league_id=liga.league_id)
+            session.add_all([inter, milan])
+            await session.flush()
+            session.add_all(
+                [
+                    _game("s-001", liga.league_id, inter.team_id, milan.team_id, -3, 1, 1),
+                    _game("s-002", liga.league_id, milan.team_id, inter.team_id, -2, 1, 1),
+                    _game("s-003", liga.league_id, inter.team_id, milan.team_id, -1, 2, 0),
+                ]
+            )
+            await session.commit()
+            league_id = liga.league_id
+
+        response = await client.get(f"/api/v1/base/leagues/{league_id}/insights")
+        assert response.status_code == 200
+        assert [
+            (row["label"], row["count"])
+            for row in response.json()["score_distribution"]
+        ] == [("1:1", 2), ("2:0", 1)]
 
     async def test_returns_404_for_unknown_league(
         self, env: tuple[AsyncClient, async_sessionmaker]

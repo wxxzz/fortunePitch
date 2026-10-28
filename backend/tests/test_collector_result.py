@@ -18,7 +18,7 @@ from app.collector.sync import result_sync
 from app.core.config import get_settings
 from app.core.database import Base, get_db_session
 from app.main import app
-from app.models import League, MatchGame, MatchResult, MatchStatus, Team
+from app.models import League, MatchGame, MatchOdds, MatchResult, MatchStatus, Team
 
 settings = get_settings()
 HEADERS = {"X-API-Key": settings.API_KEY}
@@ -563,11 +563,97 @@ class TestResultAPI:
         assert first["hafu"] == "负负"
         assert first["sp_a"] == 3.08
         assert first["pool_status"] == "Payout"
+        # 胜平负中奖赔率取赛果 SP,无需在售赔率池;其余玩法无赔率池为 None
+        assert first["had_sp"] == 3.08
+        assert first["crs_sp"] is None
         # 取消场次比分与玩法结果为空,保留状态
         cancelled = results[2]
         assert cancelled["full_score"] is None
         assert cancelled["had"] is None
         assert cancelled["pool_status"] == "Cancelled"
+
+    async def test_list_results_with_play_odds(
+        self, client: AsyncClient, session_factory: async_sessionmaker
+    ) -> None:
+        """预置在售赔率池后,各玩法中奖选项赔率随列表下发(比分 5:2@100 口径)。"""
+        async with session_factory() as session:
+            session.add(
+                MatchOdds(
+                    match_id="2041028",
+                    pools=[
+                        {
+                            "poolCode": "HAD",
+                            "playName": "胜平负",
+                            "options": [
+                                {"code": "h", "label": "主胜", "odds": 2.13},
+                                {"code": "d", "label": "平", "odds": 2.98},
+                                {"code": "a", "label": "客胜", "odds": 3.5},
+                            ],
+                        },
+                        {
+                            "poolCode": "HHAD",
+                            "playName": "让球胜平负",
+                            "goalLine": "-1",
+                            "options": [
+                                {"code": "h", "label": "主胜", "odds": 2.5},
+                                {"code": "d", "label": "平", "odds": 3.1},
+                                {"code": "a", "label": "客胜", "odds": 4.2},
+                            ],
+                        },
+                        {
+                            "poolCode": "CRS",
+                            "playName": "比分",
+                            "options": [
+                                {"code": "s01s02", "label": "1:2", "odds": 15.0},
+                                {"code": "s1sh", "label": "胜其他", "odds": 100.0},
+                            ],
+                        },
+                        {
+                            "poolCode": "TTG",
+                            "playName": "总进球",
+                            "options": [
+                                {"code": "s3", "label": "3", "odds": 6.5},
+                                {"code": "s7", "label": "7+", "odds": 60.0},
+                            ],
+                        },
+                        {
+                            "poolCode": "HAFU",
+                            "playName": "半全场",
+                            "options": [
+                                {"code": "hh", "label": "胜胜", "odds": 3.2},
+                                {"code": "aa", "label": "负负", "odds": 8.0},
+                            ],
+                        },
+                    ],
+                )
+            )
+            await session.commit()
+
+        await client.post(
+            "/api/v1/collector/results/sync",
+            json={"date": "2026-08-24", "date_type": "sale"},
+            headers=HEADERS,
+        )
+        response = await client.get(
+            "/api/v1/match/results",
+            params={"start_date": "2026-08-24", "end_date": "2026-08-24"},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200
+        results = response.json()
+        # 2041028:客胜 / 让球客胜 / 1:2 / 3 / 负负
+        first = results[0]
+        # 胜平负优先取赛果 SP(3.08),其余玩法取在售赔率池的中奖选项
+        assert first["had_sp"] == 3.08
+        assert first["hhad_sp"] == 4.2
+        assert first["crs_sp"] == 15.0
+        assert first["ttg_sp"] == 6.5
+        assert first["hafu_sp"] == 8.0
+        # 未预置赔率池的场次(2041030):胜平负仍取赛果 SP,其余玩法为 None
+        assert results[1]["had_sp"] == 1.85
+        assert results[1]["crs_sp"] is None
+        # 取消场次无玩法结果,赔率亦为 None
+        assert results[2]["had_sp"] is None
 
     async def test_list_results_empty_before_sync(self, client: AsyncClient) -> None:
         response = await client.get(

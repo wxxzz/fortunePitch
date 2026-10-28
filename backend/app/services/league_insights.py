@@ -5,7 +5,7 @@
 - 赛果开奖快照(fp_match_results,半全场/让球玩法标签与胜平负 SP)。
 
 维度:胜平负分布、进球(场均/3 球及以上/双方进球)、总进球分布、
-半全场分布、让球胜平负分布、热门命中(SP 最低项的开奖命中率)。
+比分分布、半全场分布、让球胜平负分布、热门命中(SP 最低项的开奖命中率)。
 
 合规说明:仅提供数据分析参考,不构成投注建议。
 """
@@ -72,6 +72,8 @@ class LeagueInsightsData(typing.NamedTuple):
     btts_rate: float | None
     # 总进球分布(0/1/2/3/4/5+,固定顺序)
     total_goals: list[LabelCount]
+    # 比分分布(全场比分标签,按出现次数降序、同频按标签升序)
+    score_distribution: list[LabelCount]
     # 半全场分布(按出现次数降序)
     half_full: list[LabelCount]
     # 让球胜平负分布(固定顺序,仅非零项)
@@ -129,6 +131,7 @@ async def get_league_insights(
     finished_count = 0
     home_win = draw = away_win = 0
     total_goals_counter: dict[str, int] = {}
+    score_counter: dict[str, int] = {}
     over2_5_count = btts_count = 0
     goals_sum = home_goals_sum = away_goals_sum = 0
     hafu_counter: dict[str, int] = {}
@@ -156,6 +159,8 @@ async def get_league_insights(
             btts_count += 1
         bucket = str(home + away) if home + away < 5 else "5+"
         total_goals_counter[bucket] = total_goals_counter.get(bucket, 0) + 1
+        score_label = f"{home}:{away}"
+        score_counter[score_label] = score_counter.get(score_label, 0) + 1
 
         if result is None:
             continue
@@ -218,6 +223,12 @@ async def get_league_insights(
         total_goals=[
             LabelCount(label=bucket, count=total_goals_counter.get(bucket, 0))
             for bucket in ("0", "1", "2", "3", "4", "5+")
+        ],
+        score_distribution=[
+            LabelCount(label=label, count=count)
+            for label, count in sorted(
+                score_counter.items(), key=lambda kv: (-kv[1], kv[0])
+            )
         ],
         half_full=[
             LabelCount(label=label, count=count)

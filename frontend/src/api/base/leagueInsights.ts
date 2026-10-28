@@ -40,6 +40,8 @@ export interface LeagueInsights {
   btts_rate: number | null
   /** 总进球分布(0/1/2/3/4/5+,固定顺序) */
   total_goals: LabelCount[]
+  /** 比分分布(全场比分标签,按出现次数降序、同频按标签升序) */
+  score_distribution: LabelCount[]
   /** 半全场分布(按出现次数降序) */
   half_full: LabelCount[]
   /** 让球胜平负分布(固定顺序,仅非零项) */
@@ -48,7 +50,7 @@ export interface LeagueInsights {
   favorite: LeagueFavoriteStats | null
 }
 
-/** 查询联赛多维度分析(胜平负/进球/半全场/让球/热门命中分布) */
+/** 查询联赛多维度分析(胜平负/进球/总进球/比分/半全场/让球/热门命中分布) */
 export async function getLeagueInsights(leagueId: number): Promise<LeagueInsights> {
   const { data } = await request.get<LeagueInsights>(
     `/api/v1/base/leagues/${leagueId}/insights`,

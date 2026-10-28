@@ -471,6 +471,21 @@ class MatchResultRead(BaseModel):
     sp_h: float | None = Field(default=None, description="主胜开奖 SP")
     sp_d: float | None = Field(default=None, description="平局开奖 SP")
     sp_a: float | None = Field(default=None, description="客胜开奖 SP")
+    had_sp: float | None = Field(
+        default=None, description="胜平负中奖选项开奖赔率(优先赛果 SP)"
+    )
+    hhad_sp: float | None = Field(
+        default=None, description="让球胜平负中奖选项开奖赔率(在售赔率池)"
+    )
+    crs_sp: float | None = Field(
+        default=None, description="比分中奖选项开奖赔率(在售赔率池)"
+    )
+    ttg_sp: float | None = Field(
+        default=None, description="总进球中奖选项开奖赔率(在售赔率池)"
+    )
+    hafu_sp: float | None = Field(
+        default=None, description="半全场中奖选项开奖赔率(在售赔率池)"
+    )
     pool_status: str = Field(description="开奖状态,如 Payout=已开奖")
 
 

@@ -3,7 +3,8 @@
  * 联赛多维度分析面板:对该联赛已完赛场次做结果分布统计。
  *
  * 维度:胜平负分布、进球(场均/3 球及以上/双方进球)、总进球分布、
- * 半全场分布、让球胜平负分布、热门命中(胜平负 SP 最低项的开奖命中率)。
+ * 比分分布(热门比分 Top10)、半全场分布、让球胜平负分布、
+ * 热门命中(胜平负 SP 最低项的开奖命中率)。
  * 组件挂载即拉取;结果为数据分析参考,不构成投注建议。
  */
 import { computed, onMounted, ref } from 'vue'
@@ -56,6 +57,9 @@ const resultRows = computed(() => {
     { label: '客胜', count: data.away_win, rate: data.away_win_rate, tone: 'away' },
   ]
 })
+
+/** 热门比分 Top10(后端已按次数降序) */
+const topScores = computed(() => insights.value?.score_distribution.slice(0, 10) ?? [])
 
 /** 概览统计瓦片 */
 const statTiles = computed(() => {
@@ -155,6 +159,27 @@ const statTiles = computed(() => {
                 <span class="league-insights__bar-label">{{ row.label }} 球</span>
                 <div class="league-insights__bar-track">
                   <div class="league-insights__bar" :style="{ width: barWidth(row.count) }"></div>
+                </div>
+                <span class="league-insights__bar-value">{{ row.count }} 场</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- 比分分布(热门比分 Top10) -->
+          <div>
+            <h4 class="league-insights__section-title">热门比分 Top10</h4>
+            <div class="league-insights__bars">
+              <div
+                v-for="row in topScores"
+                :key="row.label"
+                class="league-insights__bar-row"
+              >
+                <span class="league-insights__bar-label">{{ row.label }}</span>
+                <div class="league-insights__bar-track">
+                  <div
+                    class="league-insights__bar league-insights__bar--score"
+                    :style="{ width: barWidth(row.count) }"
+                  ></div>
                 </div>
                 <span class="league-insights__bar-value">{{ row.count }} 场</span>
               </div>
@@ -368,6 +393,10 @@ const statTiles = computed(() => {
 
     &--handicap {
       background: vars.$color-info;
+    }
+
+    &--score {
+      background: vars.$color-positive;
     }
   }
 

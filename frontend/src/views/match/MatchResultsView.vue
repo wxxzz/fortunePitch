@@ -1,10 +1,11 @@
 <script setup lang="ts">
 /**
- * 赛果开奖页:按售卖日展示竞彩各玩法开奖结果与多维度分析。
+ * 赛果开奖页:按售卖日(单日)展示竞彩各玩法开奖结果与多维度分析。
  *
  * 参考中国竞彩网赛果开奖页(sporttery.cn/jc/zqsgkj)的表格口径:
- * 编号 / 联赛 / 对阵(含让球盘口) / 半场 / 全场 / 5 种玩法开奖结果 / 胜平负 SP。
- * 查询口径与赛事中心一致:按竞彩售卖日范围过滤(最长 31 天),
+ * 编号 / 联赛 / 对阵(含让球盘口) / 半场 / 全场 / 5 种玩法开奖结果
+ * (玩法结果后附中奖选项赔率,如比分 5:2@100) / 胜平负 SP。
+ * 查询口径与赛事中心一致:按竞彩售卖日过滤,
  * 次日凌晨开赛的比赛归属前一售卖日。
  * 列表下方为多维度分析区:胜平负/让球/总进球/比分/半全场开奖分布
  * 与按联赛的胜负及场均进球,以"赛果开奖 / 多维度分析"选项卡切换。
@@ -28,12 +29,8 @@ const CONTENT_TABS = [
 
 type ContentTab = (typeof CONTENT_TABS)[number]['key']
 
-/** 售卖日范围上限(天),避免一次同步/统计拉取过多 */
-const MAX_RANGE_DAYS = 31
-
-/** 售卖日起止(YYYY-MM-DD),默认今天,与赛事中心的口径一致 */
+/** 售卖日(YYYY-MM-DD,单日),默认今天,与赛事中心的口径一致 */
 const startDate = ref(todayIso())
-const endDate = ref(todayIso())
 const results = ref<MatchResultItem[]>([])
 const stats = ref<MatchResultStats | null>(null)
 const isLoading = ref(false)
@@ -44,15 +41,11 @@ const syncOutcome = ref<ResultSyncResult | null>(null)
 const activeTab = ref<ContentTab>('results')
 
 const canQuery = computed(
-  () => startDate.value !== '' && endDate.value !== '' && !isLoading.value,
+  () => startDate.value !== '' && !isLoading.value,
 )
 
 const canSubmitResult = computed(
-  () =>
-    startDate.value !== '' &&
-    endDate.value !== '' &&
-    !isSyncing.value &&
-    !isLoading.value,
+  () => startDate.value !== '' && !isSyncing.value && !isLoading.value,
 )
 
 /** 已开赛场次(非取消)计数,用于汇总条 */
@@ -74,42 +67,29 @@ const statDimensions = computed<
   ].filter((dimension) => dimension.items.length > 0)
 })
 
-/** 起止日期间的售卖日列表(含端点);范围非法时返回 null 并提示错误 */
-function dateRange(): string[] | null {
-  const start = new Date(`${startDate.value}T00:00:00`)
-  const end = new Date(`${endDate.value}T00:00:00`)
-  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+/** 校验售卖日格式;非法时提示错误并返回 false */
+function validateSaleDate(): boolean {
+  if (startDate.value === '') {
     errorMessage.value = '售卖日期格式不正确'
-    return null
+    return false
   }
-  if (start > end) {
-    errorMessage.value = '开始日期不能晚于结束日期'
-    return null
+  const parsed = new Date(`${startDate.value}T00:00:00`)
+  if (Number.isNaN(parsed.getTime())) {
+    errorMessage.value = '售卖日期格式不正确'
+    return false
   }
-  const dayCount = Math.round((end.getTime() - start.getTime()) / 86_400_000) + 1
-  if (dayCount > MAX_RANGE_DAYS) {
-    errorMessage.value = `时间范围最长 ${MAX_RANGE_DAYS} 天`
-    return null
-  }
-  const days: string[] = []
-  for (let offset = 0; offset < dayCount; offset += 1) {
-    const cursor = new Date(start)
-    cursor.setDate(cursor.getDate() + offset)
-    days.push(isoOf(cursor))
-  }
-  return days
+  return true
 }
 
 async function fetchResults(): Promise<void> {
   if (!canQuery.value) return
-  const days = dateRange()
-  if (days === null) return
+  if (!validateSaleDate()) return
   isLoading.value = true
   errorMessage.value = ''
   try {
     const [list, statsData] = await Promise.all([
-      listMatchResults(startDate.value, endDate.value),
-      listMatchResultStats(startDate.value, endDate.value),
+      listMatchResults(startDate.value, startDate.value),
+      listMatchResultStats(startDate.value, startDate.value),
     ])
     results.value = list
     stats.value = statsData
@@ -120,44 +100,32 @@ async function fetchResults(): Promise<void> {
   }
 }
 
-/** 快捷同步:逐个售卖日拉取当日与次日赛果后刷新列表 */
+/** 快捷同步:按售卖日拉取当日与次日赛果后刷新列表 */
 async function handleSync(): Promise<void> {
   if (!canSubmitResult.value) return
-  const days = dateRange()
-  if (days === null) return
+  if (!validateSaleDate()) return
   isSyncing.value = true
   errorMessage.value = ''
   try {
-    const skipped: string[] = []
-    let dayResultCount = 0
-    let createdCount = 0
-    let updatedCount = 0
-    let gameUpdatedCount = 0
-    let source = ''
-    for (const day of days) {
-      const outcome = await syncResults(day, 'sale')
-      dayResultCount += outcome.day_result_count
-      createdCount += outcome.created_count
-      updatedCount += outcome.updated_count
-      gameUpdatedCount += outcome.game_updated_count
-      skipped.push(...outcome.skipped_matches)
-      source = outcome.source
-    }
-    syncOutcome.value = {
-      date: `${days[0]} ~ ${days[days.length - 1]}`,
-      day_result_count: dayResultCount,
-      created_count: createdCount,
-      updated_count: updatedCount,
-      game_updated_count: gameUpdatedCount,
-      skipped_matches: skipped,
-      source,
-    }
+    const outcome = await syncResults(startDate.value, 'sale')
+    syncOutcome.value = outcome
     await fetchResults()
   } catch (err) {
     errorMessage.value = err instanceof Error ? err.message : '赛果同步失败'
   } finally {
     isSyncing.value = false
   }
+}
+
+/** 玩法结果 + 中奖选项赔率展示,如 5:2@100 */
+function formatPlay(label: string | null, sp: number | null): string {
+  if (label === null || label === '') return '—'
+  return sp === null ? label : `${label}@${formatSp(sp)}`
+}
+
+/** SP 展示:去掉尾随多余的 0(100.00 -> 100,2.10 -> 2.1) */
+function formatSp(sp: number): string {
+  return sp.toFixed(2).replace(/\.?0+$/, '')
 }
 
 /** 售卖日展示(MM-DD) */
@@ -173,12 +141,6 @@ function todayIso(): string {
   return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
 }
 
-/** Date 转本地时区 ISO 日期(YYYY-MM-DD) */
-function isoOf(date: Date): string {
-  const pad = (n: number): string => String(n).padStart(2, '0')
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
-}
-
 onMounted(() => {
   void fetchResults()
 })
@@ -190,27 +152,17 @@ onMounted(() => {
       <h2 class="results__title">赛果开奖</h2>
       <p class="results__subtitle">
         数据来源:中国竞彩网赛果开奖页(sporttery.cn/jc/zqsgkj)。
-        按售卖日范围展示(最长 31 天,与赛事中心口径一致,
+        按售卖日单日展示(与赛事中心口径一致,
         次日凌晨开赛的比赛归属前一售卖日);比分与玩法结果由同步赛果写入,
-        取消场次保留状态不展示比分。
+        玩法结果后附中奖选项赔率(如比分 5:2@100),取消场次保留状态不展示比分。
       </p>
     </header>
 
     <div class="results__toolbar">
       <label class="results__filter">
-        <span>售卖日起</span>
+        <span>售卖日</span>
         <input
           v-model="startDate"
-          class="results__date-input"
-          type="date"
-          :disabled="isLoading || isSyncing"
-          @change="fetchResults"
-        />
-      </label>
-      <label class="results__filter">
-        <span>售卖日止</span>
-        <input
-          v-model="endDate"
           class="results__date-input"
           type="date"
           :disabled="isLoading || isSyncing"
@@ -301,11 +253,11 @@ onMounted(() => {
           <td class="results__score">{{ item.full_score ?? '—' }}</td>
           <td class="results__team">{{ item.away_team_name }}</td>
           <td class="results__half">{{ item.half_score ?? '—' }}</td>
-          <td class="results__play">{{ item.had ?? '—' }}</td>
-          <td class="results__play">{{ item.hhad ?? '—' }}</td>
-          <td class="results__play">{{ item.crs ?? '—' }}</td>
-          <td class="results__play">{{ item.ttg ?? '—' }}</td>
-          <td class="results__play">{{ item.hafu ?? '—' }}</td>
+          <td class="results__play">{{ formatPlay(item.had, item.had_sp) }}</td>
+          <td class="results__play">{{ formatPlay(item.hhad, item.hhad_sp) }}</td>
+          <td class="results__play">{{ formatPlay(item.crs, item.crs_sp) }}</td>
+          <td class="results__play">{{ formatPlay(item.ttg, item.ttg_sp) }}</td>
+          <td class="results__play">{{ formatPlay(item.hafu, item.hafu_sp) }}</td>
           <td class="results__sp">{{ item.sp_h?.toFixed(2) ?? '—' }}</td>
           <td class="results__sp">{{ item.sp_d?.toFixed(2) ?? '—' }}</td>
           <td class="results__sp">{{ item.sp_a?.toFixed(2) ?? '—' }}</td>
@@ -327,7 +279,7 @@ onMounted(() => {
       <template v-if="stats && stats.settled > 0">
         <h3 class="results__stats-title">多维度分析</h3>
         <p class="results__stats-meta">
-          {{ stats.start_date }} ~ {{ stats.end_date }},已开赛
+          售卖日 {{ stats.start_date }},已开赛
           {{ stats.settled }} 场<template v-if="stats.cancelled > 0">
             · 取消/无效 {{ stats.cancelled }} 场</template
           >,取消场次不参与统计。

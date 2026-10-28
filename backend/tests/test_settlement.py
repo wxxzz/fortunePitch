@@ -39,6 +39,7 @@ from app.services.settlement import (
     resolve_option_hit,
     resolve_option_label,
     resolve_payout_odds,
+    resolve_result_play_odds,
     run_settlement,
     settle_bet_schemes,
     settle_user_decisions,
@@ -151,6 +152,125 @@ class TestResolvePayoutOdds:
         assert resolve_payout_odds("HAD", "h", None, None) is None
         pools = [{"poolCode": "HAD", "options": [{"code": "h", "odds": 0}]}]
         assert resolve_payout_odds("HAD", "h", None, pools) is None
+
+
+class TestResolveResultPlayOdds:
+    """resolve_result_play_odds:赛果各玩法中奖选项赔率(开奖页展示口径)。"""
+
+    def _result(self, **kwargs: typing.Any) -> MatchResult:
+        return MatchResult(match_id="m-play-odds", **kwargs)
+
+    def _pools(self) -> list[dict[str, typing.Any]]:
+        return [
+            {
+                "poolCode": "HAD",
+                "options": [
+                    {"code": "h", "label": "主胜", "odds": 2.13},
+                    {"code": "d", "label": "平", "odds": 2.98},
+                    {"code": "a", "label": "客胜", "odds": 3.5},
+                ],
+            },
+            {
+                "poolCode": "HHAD",
+                "goalLine": "-1",
+                "options": [
+                    {"code": "h", "label": "主胜", "odds": 2.5},
+                    {"code": "d", "label": "平", "odds": 3.1},
+                    {"code": "a", "label": "客胜", "odds": 4.2},
+                ],
+            },
+            {
+                "poolCode": "CRS",
+                "options": [
+                    {"code": "s01s02", "label": "1:2", "odds": 15.0},
+                    {"code": "s1sh", "label": "胜其他", "odds": 100.0},
+                ],
+            },
+            {
+                "poolCode": "TTG",
+                "options": [
+                    {"code": "s3", "label": "3", "odds": 6.5},
+                    {"code": "s7", "label": "7+", "odds": 60.0},
+                ],
+            },
+            {
+                "poolCode": "HAFU",
+                "options": [
+                    {"code": "hh", "label": "胜胜", "odds": 3.2},
+                    {"code": "aa", "label": "负负", "odds": 8.0},
+                ],
+            },
+        ]
+
+    def test_resolves_winning_option_odds_per_play(self) -> None:
+        result = self._result(
+            had="客胜",
+            hhad="让球客胜",
+            crs="1:2",
+            ttg="3",
+            hafu="负负",
+            sp_h=2.13,
+            sp_d=2.98,
+            sp_a=3.08,
+        )
+
+        # 胜平负优先取赛果 SP(3.08),其余玩法取在售赔率池的中奖选项
+        assert resolve_result_play_odds(result, self._pools()) == {
+            "had_sp": 3.08,
+            "hhad_sp": 4.2,
+            "crs_sp": 15.0,
+            "ttg_sp": 6.5,
+            "hafu_sp": 8.0,
+        }
+
+    def test_ttg_seven_plus_covers_high_totals(self) -> None:
+        """总进球超出常规选项(8 球)命中"7+"选项。"""
+        result = self._result(ttg="8")
+        assert resolve_result_play_odds(result, self._pools())["ttg_sp"] == 60.0
+
+    def test_crs_high_score_hits_special_option(self) -> None:
+        """高比分(6:2)不在常规选项内,命中"胜其他"。"""
+        result = self._result(crs="6:2")
+        assert resolve_result_play_odds(result, self._pools())["crs_sp"] == 100.0
+
+    def test_returns_none_without_pools(self) -> None:
+        """无在售赔率池(未同步赔率的场次)各玩法赔率为 None。"""
+        result = self._result(ttg="3")
+        assert resolve_result_play_odds(result, None) == {
+            "had_sp": None,
+            "hhad_sp": None,
+            "crs_sp": None,
+            "ttg_sp": None,
+            "hafu_sp": None,
+        }
+
+    def test_had_resolves_from_sp_without_pools(self) -> None:
+        """胜平负中奖选项可由开奖标签反查,无赔率池时仍取赛果 SP。"""
+        result = self._result(had="客胜", sp_a=3.08)
+        assert resolve_result_play_odds(result, None)["had_sp"] == 3.08
+
+    def test_had_resolves_from_sp_when_pool_missing(self) -> None:
+        """赔率池缺 HAD 玩法(partial 同步)时仍取赛果 SP。"""
+        result = self._result(had="主胜", sp_h=2.13)
+        pools = [p for p in self._pools() if p["poolCode"] != "HAD"]
+        assert resolve_result_play_odds(result, pools)["had_sp"] == 2.13
+
+    def test_returns_none_without_result_labels(self) -> None:
+        """取消/未开奖场次无玩法结果,各玩法赔率为 None。"""
+        cancelled = self._result(pool_status="Cancelled")
+        assert resolve_result_play_odds(cancelled, self._pools()) == {
+            "had_sp": None,
+            "hhad_sp": None,
+            "crs_sp": None,
+            "ttg_sp": None,
+            "hafu_sp": None,
+        }
+
+    def test_returns_none_when_pool_missing_for_play(self) -> None:
+        """某玩法不在赔率池内(未开售)时该玩法赔率为 None。"""
+        result = self._result(crs="1:2")
+        pools = [p for p in self._pools() if p["poolCode"] != "CRS"]
+        assert resolve_result_play_odds(result, pools)["crs_sp"] is None
 
 
 # ---------- 环境与数据预置 ----------
