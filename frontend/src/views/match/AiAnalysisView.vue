@@ -7,6 +7,9 @@
  * 五种玩法选项卡(胜平负/让球胜平负/比分/总进球/半全场)展示
  * 比赛场次编号、主客队、玩法推荐与备选(附最新赔率,如 主胜@1.63)、
  * 赛果开奖与命中比对、置信度与依据。
+ * 列表默认按置信度倒序(点击「编号 / 置信度」表头可切换排序键与方向,
+ * 当前排序在切换日期与玩法选项卡时保留);
+ * 点击场次编号或联赛单元格可跳转该场的深度分析页。
  * 结果为数据分析参考,不构成投注建议。
  */
 import { computed, onMounted, ref } from 'vue'
@@ -41,6 +44,46 @@ const rows = ref<LlmRecommendationRow[]>([])
 const isLoading = ref(false)
 const errorMessage = ref('')
 
+// ---------- 列表排序(点击表头切换) ----------
+
+/** 表头可排序的键 */
+type SortKey = 'match_num' | 'confidence'
+
+/** 排序键(默认置信度,与后端返回口径一致) */
+const sortKey = ref<SortKey>('confidence')
+/** 排序方向(置信度默认倒序) */
+const sortDir = ref<'asc' | 'desc'>('desc')
+
+/** 点击表头:同键切方向,异键换键(编号升序/置信度倒序起步) */
+function toggleSort(key: SortKey): void {
+  if (sortKey.value === key) {
+    sortDir.value = sortDir.value === 'asc' ? 'desc' : 'asc'
+  } else {
+    sortKey.value = key
+    sortDir.value = key === 'confidence' ? 'desc' : 'asc'
+  }
+}
+
+/** 表头排序指示:激活键显示方向箭头,其余显示双向占位 */
+function sortIndicator(key: SortKey): string {
+  if (sortKey.value !== key) return '⇅'
+  return sortDir.value === 'asc' ? '↑' : '↓'
+}
+
+/** 竞彩编号的周几顺序(周一 ~ 周日) */
+const WEEKDAY_ORDER = ['一', '二', '三', '四', '五', '六', '日']
+
+/** 赛事编号排序键:先周几、再尾随场次序号;非标准编号排在最后 */
+function matchNumKey(numStr: string): [number, number] {
+  const matched = /^周([一二三四五六日])(\d+)$/.exec(numStr.trim())
+  if (matched === null) {
+    const digits = Number(numStr.replace(/\D/g, ''))
+    return [WEEKDAY_ORDER.length + 1, Number.isFinite(digits) ? digits : 0]
+  }
+  const day = WEEKDAY_ORDER.indexOf(matched[1])
+  return [day === -1 ? WEEKDAY_ORDER.length + 1 : day, Number(matched[2])]
+}
+
 const canQuery = computed(() => selectedDate.value !== '' && !isLoading.value)
 
 /** 各玩法选项卡的推荐条数 */
@@ -52,10 +95,20 @@ const playCounts = computed<Record<string, number>>(() => {
   return counts
 })
 
-/** 当前选项卡的推荐列表(后端已按置信度倒序) */
-const activeRows = computed<LlmRecommendationRow[]>(() =>
-  rows.value.filter((r) => r.play_code === activePlayCode.value),
-)
+/** 当前选项卡的推荐列表(按表头选定的键与方向排序) */
+const activeRows = computed<LlmRecommendationRow[]>(() => {
+  const list = rows.value.filter((r) => r.play_code === activePlayCode.value)
+  const dir = sortDir.value === 'asc' ? 1 : -1
+  return [...list].sort((a, b) => {
+    if (sortKey.value === 'confidence') {
+      return (a.confidence - b.confidence) * dir
+    }
+    const [dayA, numA] = matchNumKey(a.match_num_str)
+    const [dayB, numB] = matchNumKey(b.match_num_str)
+    // 非标准编号的并列键相同(如同为空)时,按原文比较保证顺序确定
+    return (((dayA - dayB) || (numA - numB)) || a.match_num_str.localeCompare(b.match_num_str)) * dir
+  })
+})
 
 const totalCount = computed(() => rows.value.length)
 
@@ -230,12 +283,46 @@ onMounted(() => {
       <table v-if="activeRows.length > 0" class="ai-analysis__table">
         <thead>
           <tr>
-            <th>编号</th>
+            <th
+              :aria-sort="
+                sortKey === 'match_num'
+                  ? sortDir === 'asc'
+                    ? 'ascending'
+                    : 'descending'
+                  : 'none'
+              "
+            >
+              <button
+                class="ai-analysis__sort"
+                :class="{ 'ai-analysis__sort--active': sortKey === 'match_num' }"
+                type="button"
+                @click="toggleSort('match_num')"
+              >
+                编号<span class="ai-analysis__sort-arrow">{{ sortIndicator('match_num') }}</span>
+              </button>
+            </th>
             <th>联赛 / 开赛</th>
             <th>主队</th>
             <th>客队</th>
             <th>推荐</th>
-            <th>置信度</th>
+            <th
+              :aria-sort="
+                sortKey === 'confidence'
+                  ? sortDir === 'asc'
+                    ? 'ascending'
+                    : 'descending'
+                  : 'none'
+              "
+            >
+              <button
+                class="ai-analysis__sort"
+                :class="{ 'ai-analysis__sort--active': sortKey === 'confidence' }"
+                type="button"
+                @click="toggleSort('confidence')"
+              >
+                置信度<span class="ai-analysis__sort-arrow">{{ sortIndicator('confidence') }}</span>
+              </button>
+            </th>
             <th>备选</th>
             <th>开奖结果</th>
             <th>对比</th>
@@ -244,7 +331,16 @@ onMounted(() => {
         </thead>
         <tbody>
           <tr v-for="row in activeRows" :key="`${row.match_id}:${row.play_code}`">
-            <td class="ai-analysis__match-num">{{ row.match_num_str || '—' }}</td>
+            <td class="ai-analysis__match-num">
+              <button
+                class="ai-analysis__match-num-btn"
+                type="button"
+                title="进入该场深度分析"
+                @click="openMatchDetail(row.match_id)"
+              >
+                {{ row.match_num_str || '—' }}
+              </button>
+            </td>
             <td class="ai-analysis__match-cell">
               <button
                 class="ai-analysis__match-btn"
@@ -498,10 +594,51 @@ onMounted(() => {
     }
   }
 
+  &__sort {
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-weight: inherit;
+    cursor: pointer;
+    white-space: nowrap;
+
+    &:hover {
+      color: vars.$color-primary;
+    }
+
+    &--active {
+      color: vars.$color-primary;
+    }
+  }
+
+  &__sort-arrow {
+    margin-left: 2px;
+    font-size: vars.$font-size-sm;
+  }
+
   &__match-num {
     white-space: nowrap;
     font-weight: 600;
     color: vars.$color-text-primary;
+  }
+
+  &__match-num-btn {
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-weight: inherit;
+    cursor: pointer;
+    white-space: nowrap;
+
+    &:hover,
+    &:focus-visible {
+      color: vars.$color-primary;
+      text-decoration: underline;
+    }
   }
 
   &__match-cell {
