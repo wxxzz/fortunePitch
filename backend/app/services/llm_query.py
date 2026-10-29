@@ -135,24 +135,30 @@ def resolve_recommendation_hit(
     play_code: str,
     recommendation: str,
     result: str | None,
+    alternatives: typing.Sequence[str] | None = None,
 ) -> bool | None:
-    """比对推荐选项与该玩法的赛果开奖结果。
+    """比对推荐(含备选)选项与该玩法的赛果开奖结果。
 
     推荐与开奖文案均归一化后精确比对(模型输出与开奖页口径可能存在
-    "让球"前缀/"球"后缀差异)。未同步赛果(未开奖)时返回 None。
+    "让球"前缀/"球"后缀差异);备选项与主选同权参与比对,
+    主选或任一备选命中即视为命中。未同步赛果(未开奖)时返回 None。
 
     Args:
         play_code: 玩法编码。
         recommendation: 推荐选项展示名。
         result: 该玩法的开奖结果标签(如"客胜"/"让球主胜"/"1:2"/"3"/"负负")。
+        alternatives: 备选选项展示名列表(缺省不参与比对)。
 
     Returns:
         命中为 True,未中为 False,未开奖为 None。
     """
     if not result:
         return None
-    return _normalize_play_label(play_code, recommendation) == _normalize_play_label(
-        play_code, result
+    normalized_result = _normalize_play_label(play_code, result)
+    candidates = [recommendation, *(alternatives or [])]
+    return any(
+        _normalize_play_label(play_code, option) == normalized_result
+        for option in candidates
     )
 
 

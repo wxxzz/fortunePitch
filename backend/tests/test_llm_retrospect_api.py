@@ -31,6 +31,7 @@ from app.models import (
     Team,
 )
 from app.services import llm
+from app.services import llm_retrospect
 
 settings = get_settings()
 HEADERS = {"X-API-Key": settings.API_KEY}
@@ -187,7 +188,7 @@ async def _seed_match(
                     recommendation="1:1",
                     confidence=0.18,
                     reasoning="平局比分兼顾攻防均衡的判断。",
-                    alternatives=["2:1"],
+                    alternatives=["0:0"],
                 ),
             ]
             session.add(analysis)
@@ -435,3 +436,47 @@ class TestGenerateRetrospect:
             assert logs[0].request_params["analysis_type"] == "retrospect"
             assert logs[0].request_messages[0]["role"] == "system"
             assert "事后复盘" in logs[0].request_messages[0]["content"]
+
+
+# ---------- 比对纯函数(备选也算命中口径) ----------
+
+
+class TestBuildComparisonAlternatives:
+    """llm_retrospect.build_comparison:备选与主选同权参与命中比对。"""
+
+    def test_alternative_match_counts_as_hit(self) -> None:
+        # Arrange:两行 HAD 主选均未中,其一备选"客胜"与开奖一致
+        # (内存对象,不经数据库)
+        analysis = MatchLlmAnalysis(
+            match_id="m-alt",
+            provider="qwen",
+            model="qwen-max",
+            summary="客队占优",
+            risks=[],
+        )
+        analysis.plays = [
+            MatchLlmPlayRec(
+                play_code="HAD",
+                play_name="胜平负",
+                recommendation="主胜",
+                confidence=0.55,
+                reasoning="主队近期回暖。",
+                alternatives=["客胜"],
+            ),
+            MatchLlmPlayRec(
+                play_code="HAD",
+                play_name="胜平负",
+                recommendation="主胜",
+                confidence=0.55,
+                reasoning="主队近期回暖。",
+                alternatives=["平"],
+            ),
+        ]
+        result = MatchResult(match_id="m-alt", had="客胜")
+
+        # Act
+        comparison = llm_retrospect.build_comparison(analysis, result)
+
+        # Assert:备选命中即命中;主选备选全未中才为未中
+        assert comparison[0].is_hit is True
+        assert comparison[1].is_hit is False

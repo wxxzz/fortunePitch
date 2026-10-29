@@ -53,6 +53,22 @@ PLAY_NAMES: dict[str, str] = {
     "HAFU": "半全场",
 }
 
+# 各玩法备选(次选)选项数上限(总选项数 = 主选 + 备选):
+# 胜平负/让球胜平负/总进球/半全场共 2 个选项,比分共 3 个选项
+_MAX_ALTERNATIVES_BY_PLAY: dict[str, int] = {
+    "HAD": 1,
+    "HHAD": 1,
+    "TTG": 1,
+    "HAFU": 1,
+    "CRS": 2,
+}
+
+# 新增玩法时防止两个字典键集漂移(漏配备选上限会导致解析层 KeyError
+# 被吞掉、该玩法推荐被静默丢弃)
+assert set(_MAX_ALTERNATIVES_BY_PLAY) == set(PLAY_NAMES), (
+    "_MAX_ALTERNATIVES_BY_PLAY 必须覆盖 PLAY_NAMES 的全部玩法"
+)
+
 # 比赛状态 -> 展示名
 _STATUS_LABELS: dict[MatchStatus, str] = {
     MatchStatus.PENDING: "未开赛",
@@ -122,7 +138,10 @@ class LlmPlayRecommendation(BaseModel):
     recommendation: str = Field(description="推荐选项,如 主胜 / 1:2 / 3球 / 胜胜")
     confidence: float = Field(ge=0.0, le=1.0, description="置信度,0~1")
     reasoning: str = Field(description="推荐理由(引用基本面或赔率数据)")
-    alternatives: list[str] = Field(default_factory=list, description="次选选项,最多2个")
+    alternatives: list[str] = Field(
+        default_factory=list,
+        description="次选选项,胜平负/让球胜平负/总进球/半全场最多1个,比分最多2个",
+    )
 
 
 class LlmAnalysis(BaseModel):
@@ -364,7 +383,7 @@ def build_analysis_messages(context: MatchAnalysisContext) -> list[dict[str, str
         '      "recommendation": "推荐选项中文展示名,如 主胜 / 平 / 客胜 / 1:2 / 3球 / 胜胜",\n'
         '      "confidence": 0.55,\n'
         '      "reasoning": "推荐理由,80字以内,须体现证据权重与交叉验证结论,引用基本面或赔率数据",\n'
-        '      "alternatives": ["次选选项名,最多2个,可为空数组"]\n'
+        '      "alternatives": ["次选选项名:胜平负/让球胜平负/总进球/半全场最多1个,比分最多2个,可为空数组"]\n'
         "    }\n"
         "  ],\n"
         '  "risks": ["风险提示,1~3条,如伤停/盘口异动/AI历史结论过时/数据不足"]\n'
@@ -558,7 +577,9 @@ def _parse_analysis(content: str, context: MatchAnalysisContext) -> tuple[str, l
                     recommendation=str(item.get("recommendation", "")),
                     confidence=float(item.get("confidence", 0.0)),
                     reasoning=str(item.get("reasoning", "")),
-                    alternatives=[str(a) for a in item.get("alternatives", [])][:2],
+                    alternatives=[
+                        str(a) for a in item.get("alternatives", [])
+                    ][:_MAX_ALTERNATIVES_BY_PLAY[item["playCode"]]],
                 )
             )
         except (KeyError, TypeError, ValueError, ValidationError):

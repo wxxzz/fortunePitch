@@ -361,7 +361,7 @@ async def list_llm_recommendations(
 
     每场比赛仅取最近一次分析(历史多份时以最新为准),
     输出场次编号/主客队/玩法推荐与次选(附选项最新赔率)/赛果开奖
-    与命中比对/置信度/依据,按置信度倒序。
+    与命中比对(主选或备选任一命中即命中)/置信度/依据,按置信度倒序。
     结果为数据分析参考,不构成投注建议。
 
     Raises:
@@ -407,7 +407,7 @@ async def list_llm_recommendations(
                 ],
                 result=play_result,
                 is_hit=llm_query.resolve_recommendation_hit(
-                    rec.play_code, rec.recommendation, play_result
+                    rec.play_code, rec.recommendation, play_result, rec.alternatives
                 ),
                 confidence=rec.confidence,
                 reasoning=rec.reasoning,

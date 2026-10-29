@@ -6,7 +6,7 @@
  * (每场比赛仅取最近一次分析,历史多份时以最新为准);
  * 五种玩法选项卡(胜平负/让球胜平负/比分/总进球/半全场)展示
  * 比赛场次编号、主客队、玩法推荐与备选(附最新赔率,如 主胜@1.63)、
- * 赛果开奖与命中比对、置信度与依据。
+ * 赛果开奖与命中比对(主选或备选任一命中即命中)、置信度与依据。
  * 列表默认按置信度倒序(点击「编号 / 置信度」表头可切换排序键与方向,
  * 当前排序在切换日期与玩法选项卡时保留);
  * 点击场次编号或联赛单元格可跳转该场的深度分析页。
@@ -256,7 +256,7 @@ onMounted(() => {
         </button>
         <span v-if="totalCount > 0" class="ai-analysis__meta">
           共 {{ totalCount }} 条推荐<template v-if="hitStats.settled > 0">
-            · 当前玩法已开奖命中 {{ hitStats.hit }}/{{ hitStats.settled }}</template
+            · 当前玩法已开奖命中 {{ hitStats.hit }}/{{ hitStats.settled }}(含备选)</template
           >
         </span>
       </div>

@@ -352,6 +352,36 @@ class TestParseAnalysis:
         with pytest.raises(LlmServiceError):
             llm._parse_analysis('{"summary": "ok", "plays": []}', context)
 
+    def test_alternatives_truncated_per_play(self) -> None:
+        # Arrange:备选项按玩法截断 —— 非比分玩法留 1 个,比分留 2 个
+        context = typing.cast(llm.MatchAnalysisContext, None)
+        content = (
+            "{"
+            '"summary": "ok",'
+            '"plays": ['
+            '{"playCode": "HAD", "recommendation": "主胜", "confidence": 0.6,'
+            ' "reasoning": "r", "alternatives": ["平", "客胜", "多余"]},'
+            '{"playCode": "CRS", "recommendation": "1:1", "confidence": 0.5,'
+            ' "reasoning": "r", "alternatives": ["2:1", "0:0", "多余"]},'
+            '{"playCode": "TTG", "recommendation": "3球", "confidence": 0.4,'
+            ' "reasoning": "r", "alternatives": ["2球", "4球"]},'
+            '{"playCode": "HAFU", "recommendation": "胜胜", "confidence": 0.45,'
+            ' "reasoning": "r", "alternatives": ["平胜", "平平", "多余"]}'
+            "],"
+            '"risks": []'
+            "}"
+        )
+
+        # Act
+        _, plays, _ = llm._parse_analysis(content, context)
+
+        # Assert:超上限的备选被丢弃,保留顺序不变
+        by_code = {p.play_code: p for p in plays}
+        assert by_code["HAD"].alternatives == ["平"]
+        assert by_code["CRS"].alternatives == ["2:1", "0:0"]
+        assert by_code["TTG"].alternatives == ["2球"]
+        assert by_code["HAFU"].alternatives == ["平胜"]
+
 
 # ---------- 接口 ----------
 

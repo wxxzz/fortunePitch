@@ -283,6 +283,7 @@ async def _seed(session_factory: async_sessionmaker) -> None:
                     "recommendation": "客胜",
                     "confidence": 0.5,
                     "reasoning": "客队近期状态更稳",
+                    "alternatives": ["平"],
                 },
                 {
                     "code": "HHAD",
@@ -372,7 +373,8 @@ class TestLlmRecommendations:
             r for r in rows if r["match_id"] == "m-q2" and r["play_code"] == "HAD"
         )
         assert q2_had["result"] == "平"
-        assert q2_had["is_hit"] is False
+        # 推荐客胜未中,但备选"平"与开奖一致 → 备选也算命中
+        assert q2_had["is_hit"] is True
         assert q2_hhad["result"] == "让球客胜"
         assert q2_hhad["is_hit"] is False
 
@@ -581,3 +583,20 @@ class TestResolveRecommendationHit:
         # Act / Assert: 未同步赛果/未开奖时为 None
         assert resolve_recommendation_hit("HAD", "主胜", None) is None
         assert resolve_recommendation_hit("HAD", "主胜", "") is None
+
+    def test_alternative_match_counts_as_hit(self) -> None:
+        # Act / Assert: 主选未中但任一备选与开奖一致 → 命中
+        assert resolve_recommendation_hit("HAD", "主胜", "平", ["平"]) is True
+        assert resolve_recommendation_hit(
+            "CRS", "1:1", "2:1", ["0:0", "2:1"]
+        ) is True
+
+    def test_alternatives_normalized_before_compare(self) -> None:
+        # Act / Assert: 备选同样归一化("让球"前缀/"球"后缀)
+        assert resolve_recommendation_hit("TTG", "3球", "4", ["4球"]) is True
+        assert resolve_recommendation_hit("HHAD", "主胜", "让球平", ["平"]) is True
+
+    def test_miss_when_no_candidate_matches(self) -> None:
+        # Act / Assert: 主选与备选全部未中 → 未中
+        assert resolve_recommendation_hit("HAD", "主胜", "客胜", ["平"]) is False
+        assert resolve_recommendation_hit("HAFU", "胜胜", "平负", ["负胜"]) is False

@@ -116,8 +116,8 @@ def build_comparison(
     """把最近一次综合分析的分玩法推荐与官方开奖逐玩法比对。
 
     命中口径复用 llm_query.resolve_recommendation_hit(归一化
-    "让球"前缀/"球"后缀),与 AI 分析结果查询页一致;
-    未开奖/未开售玩法的 result 与 is_hit 为 None。
+    "让球"前缀/"球"后缀,主选或备选任一命中即命中),
+    与 AI 分析结果查询页一致;未开奖/未开售玩法的 result 与 is_hit 为 None。
     """
     items: list[RetrospectComparisonItem] = []
     for play in analysis.plays:
@@ -133,7 +133,10 @@ def build_comparison(
                 alternatives=list(play.alternatives),
                 result=play_result,
                 is_hit=llm_query.resolve_recommendation_hit(
-                    play.play_code, play.recommendation, play_result
+                    play.play_code,
+                    play.recommendation,
+                    play_result,
+                    list(play.alternatives),
                 ),
                 reasoning=play.reasoning,
             )
